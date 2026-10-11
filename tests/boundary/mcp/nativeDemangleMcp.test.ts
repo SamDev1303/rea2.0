@@ -1,12 +1,17 @@
-import { silentLogger } from "../../../src/logger.js";
-import { copyFile } from "node:fs/promises";
+import {
+  retainOwnedServiceEvidence,
+  observeOwnedNativeFixture,
+} from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
+import { NativeMacOSProvider } from "../../../src/native/NativeMacOSProvider.js";
+import { XcrunCommandRunner } from "../../../src/native/CommandRunner.js";
+import { createTestBinarySession } from "../../fixtures/binarySession.js";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { z } from "zod";
 
-import { createBinarySession } from "../../../src/composition/binary.js";
-import { parseConfig } from "../../../src/config/parseConfig.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { mcpTest } from "../../support/mcp/mcpFixture.js";
@@ -20,7 +25,7 @@ const demangledSchema = z.object({
 });
 
 describe.skipIf(process.platform !== "darwin")(
-  "native Swift demangling through MCP",
+  "installed Swift demangling on an authored fixture with retained MCP Evidence and public execution denied",
   () => {
     mcpTest(
       "passes option-like symbols to swift-demangle as symbols",
@@ -29,13 +34,17 @@ describe.skipIf(process.platform !== "darwin")(
           await createTestTempDirectory("rea-demangle-mcp-"),
           "tool",
         );
-        await copyFile("/usr/bin/true", target);
-        const configured = parseConfig({ REA_ANALYSIS_PROVIDER: "auto" });
-        if (!configured.ok) throw configured.error;
-        const session = createBinarySession(
-          configured.value,
-          silentLogger,
-          process.env,
+        const header = Buffer.alloc(32);
+        header.writeUInt32LE(0xfeedfacf, 0);
+        header.writeUInt32LE(0x0100000c, 4);
+        header.writeUInt32LE(2, 12);
+        await writeFile(target, header);
+        // Only the installed xcrun/swift-demangle utility runs, with a clean
+        // environment; this authored Mach-O target is never executed.
+        const runner = new XcrunCommandRunner({});
+        const run = vi.spyOn(runner, "run");
+        const session = createTestBinarySession(
+          new NativeMacOSProvider({}, runner),
         );
         onTestFinished(async () => {
           await session.close();
@@ -43,32 +52,39 @@ describe.skipIf(process.platform !== "darwin")(
         const client = await mcp.connect(
           createServer({ kind: "session", session }),
         );
-        const opened = await client.callTool({
-          name: "open_binary",
-          arguments: { path: target },
+        await assertOwnedFixturePublicDenial(client, "open_binary", {
+          path: target,
         });
-        expect(opened.isError, JSON.stringify(opened.content)).not.toBe(true);
+        expect(session.activeTarget()).toBeUndefined();
+        expect((await session.open(target)).ok).toBe(true);
+        const input = {
+          symbols: ["-help", "--simplified", "$s4main3FooV", "carriage\r"],
+        };
+        await assertOwnedFixturePublicDenial(client, "demangle_swift", input);
+        expect(run).not.toHaveBeenCalled();
+        const called = await retainOwnedServiceEvidence(
+          session,
+          client,
+          await observeOwnedNativeFixture(
+            session,
+            target,
+            "demangle_swift",
+            input,
+          ),
+        );
 
-        const called = await client.callTool({
-          name: "demangle_swift",
-          arguments: {
-            symbols: ["-help", "--simplified", "$s4main3FooV", "carriage\r"],
-          },
-        });
-        expect(called.isError, JSON.stringify(called.content)).not.toBe(true);
-        expect(
-          demangledSchema.parse(called.structuredContent).normalized_result
-            .symbols,
-        ).toEqual([
-          { input: "-help", output: "-help", status: "unchanged" },
-          {
-            input: "--simplified",
-            output: "--simplified",
-            status: "unchanged",
-          },
-          { input: "$s4main3FooV", output: "main.Foo", status: "demangled" },
-          { input: "carriage\r", output: "carriage\r", status: "unchanged" },
-        ]);
+        expect(demangledSchema.parse(called).normalized_result.symbols).toEqual(
+          [
+            { input: "-help", output: "-help", status: "unchanged" },
+            {
+              input: "--simplified",
+              output: "--simplified",
+              status: "unchanged",
+            },
+            { input: "$s4main3FooV", output: "main.Foo", status: "demangled" },
+            { input: "carriage\r", output: "carriage\r", status: "unchanged" },
+          ],
+        );
 
         const spanning = await client.callTool({
           name: "demangle_swift",

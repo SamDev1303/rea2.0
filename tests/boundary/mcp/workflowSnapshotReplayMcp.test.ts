@@ -1,3 +1,5 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
+import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { parseConfig } from "../../../src/config/parseConfig.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,12 +38,18 @@ const operations = [
 ] as const;
 
 const resources: Array<{ close(): Promise<unknown> }> = [];
+const authoredTargets = new Set<string>();
+const authoredSnapshots = new Set<string>();
+const fixtureSessions = new WeakMap<
+  Client,
+  ReturnType<typeof createWorkflowSession>
+>();
 
 afterEach(async () => {
   await Promise.all(resources.splice(0).map((resource) => resource.close()));
 });
 
-describe("MCP composed workflow target admission", () => {
+describe("MCP workflows on directly opened owned fixtures", () => {
   it("keeps a composed result and snapshot on its admitted target across queued close and open", async () => {
     const { targetPaths, snapshotPath } = await createWorkflowFiles(
       "rea-mcp-admitted-workflow-",
@@ -76,10 +84,7 @@ describe("MCP composed workflow target admission", () => {
       _meta: { progressToken: "close-race" },
     });
     await closeStarted.promise;
-    const openRequest = mcp.callTool({
-      name: "open_binary",
-      arguments: { path: secondPath },
-    });
+    const openRequest = openWorkflowTarget(mcp, secondPath);
     release.resolve();
 
     const analyzed = await analysisRequest;
@@ -100,8 +105,7 @@ describe("MCP composed workflow target admission", () => {
         subject: expect.objectContaining({ local_path: firstPath }),
       }),
     );
-    const opened = await openRequest;
-    expect(opened.isError, JSON.stringify(opened.content)).not.toBe(true);
+    await openRequest;
     expect(session.activeTarget()?.path).toBe(secondPath);
   });
 });
@@ -339,11 +343,7 @@ describe("MCP investigation history snapshot replay", () => {
         replay,
         "investigation-history-replay",
       );
-      const reopened = await replayMcp.callTool({
-        name: "open_binary",
-        arguments: { path: firstPath, snapshot_path: snapshotPath },
-      });
-      expect(reopened.isError, JSON.stringify(reopened.content)).not.toBe(true);
+      await openWorkflowTarget(replayMcp, firstPath, snapshotPath);
       const listed = await replayMcp.callTool({
         name: "list_unknowns",
         arguments: {},
@@ -373,7 +373,10 @@ const createWorkflowFiles = async (
       return path;
     }),
   );
-  return { targetPaths, snapshotPath: join(directory, "analysis.json") };
+  for (const path of targetPaths) authoredTargets.add(path);
+  const snapshotPath = join(directory, "analysis.json");
+  authoredSnapshots.add(snapshotPath);
+  return { targetPaths, snapshotPath };
 };
 
 const createWorkflowSession = (provider: AnalysisProvider) =>
@@ -389,21 +392,54 @@ const connectWorkflowMcp = async (
     { kind: "session", session },
     { logger: silentLogger },
   );
+  await attachNonexecutingMcpFixture(server, session, [
+    { name: "binary_overview", arguments: {} },
+    { name: "list_strings", arguments: {} },
+  ]);
   const mcp = new Client({ name: clientName, version: "1.0.0" });
+  fixtureSessions.set(mcp, session);
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
-  resources.push(mcp, server);
+  resources.push(mcp, server, session);
   await server.connect(serverTransport);
   await mcp.connect(clientTransport);
   return { mcp };
 };
 
-const openWorkflowTarget = async (mcp: Client, path: string): Promise<void> => {
-  const opened = await mcp.callTool({
+/** Open only authored fixtures directly; public snapshot/native opening stays denied. */
+const openWorkflowTarget = async (
+  mcp: Client,
+  path: string,
+  snapshotPath?: string,
+): Promise<void> => {
+  if (
+    !authoredTargets.has(path) ||
+    (snapshotPath !== undefined && !authoredSnapshots.has(snapshotPath))
+  )
+    throw new Error("Undeclared workflow fixture");
+  const session = fixtureSessions.get(mcp);
+  if (session === undefined)
+    throw new Error("Missing authored workflow session");
+  const denied = await mcp.callTool({
     name: "open_binary",
-    arguments: { path },
+    arguments: {
+      path,
+      ...(snapshotPath === undefined ? {} : { snapshot_path: snapshotPath }),
+    },
   });
-  expect(opened.isError, JSON.stringify(opened.content)).not.toBe(true);
+  expect(parseMcpToolError(denied)).toMatchObject({
+    error: { code: "capability_unavailable" },
+  });
+  const snapshot =
+    snapshotPath === undefined
+      ? undefined
+      : await readAnalysisSnapshot(snapshotPath);
+  if (snapshot !== undefined && !snapshot.ok) throw snapshot.error;
+  const opened = await session.open(
+    path,
+    snapshot?.ok ? { snapshot: snapshot.value } : {},
+  );
+  if (!opened.ok) throw opened.error;
 };
 
 const makeProvider = (

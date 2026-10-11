@@ -233,6 +233,14 @@ const readStableFileEntry = async (
 ): Promise<ReferenceSourceEntry> => {
   const { root, rootIdentity, absolute, path, expected, signal } = request;
   try {
+    if (expected.size > 8n * 1024n * 1024n)
+      return entryFailure(
+        path,
+        "file",
+        "unsupported",
+        "Reference file exceeds the eight MiB read budget",
+        safeSize(expected.size),
+      );
     const parentBefore = await validateDirectory(
       root,
       rootIdentity,

@@ -1,3 +1,8 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import {
+  assertOwnedFixturePublicDenial,
+  projectOwnedProducerError,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -16,7 +21,6 @@ import type { AndroidAnalysisPort } from "../../../src/application/android/Andro
 import { silentLogger } from "../../../src/logger.js";
 import { parseBinaryTarget } from "../../../src/application/BinaryTargetResolver.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import {
   createJadxProtocolFixture,
   verifyJadxFixtureCleanup,
@@ -81,8 +85,9 @@ it("keeps a replacement server usable after the SDK discards its discovery probe
   }
 });
 
-it("publishes and executes all APK contracts with inline Evidence and no active binary", async () => {
-  const { provider, apk, launches } = await createJadxProtocolFixture();
+it("publishes all APK contracts and retains direct owned protocol-fixture Evidence while public execution is denied", async () => {
+  const { service, provider, apk, launches } =
+    await createJadxProtocolFixture();
   const session = createTestBinarySession(() => {
     throw new Error("APK analysis must not acquire a deep binary provider");
   });
@@ -134,13 +139,16 @@ it("publishes and executes all APK contracts with inline Evidence and no active 
         ? { method_name: "onCreate" }
         : {}),
     };
-    const response = await client.callTool({
-      name: contract.name,
-      arguments: input,
-    });
-    expect(response.isError, JSON.stringify(response)).not.toBe(true);
-    expect(validateOutput(response.structuredContent)).toBe(true);
-    const result = contract.outputSchema.parse(response.structuredContent);
+    const beforeLaunches = launches.length;
+    await assertOwnedFixturePublicDenial(client, contract.name, input);
+    expect(launches).toHaveLength(beforeLaunches);
+    const response = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await service.execute(contract.name, input),
+    );
+    expect(validateOutput(response)).toBe(true);
+    const result = contract.outputSchema.parse(response);
     const evidence = parseEvidence(result);
     expect(evidence.operation).toBe(contract.name);
     expect(evidence.raw_result).not.toBeNull();
@@ -191,7 +199,7 @@ test.each([
     containsAmbientEnvironment: true,
   },
 ])(
-  "retains Android partial observations for $scenario through MCP",
+  "retains direct Android protocol partial observations for $scenario while MCP denies execution",
   async ({
     mode,
     errorCode,
@@ -201,7 +209,8 @@ test.each([
     calls,
     containsAmbientEnvironment,
   }) => {
-    const { provider, apk, launches } = await createJadxProtocolFixture(mode);
+    const { service, provider, apk, launches } =
+      await createJadxProtocolFixture(mode);
     const session = createTestBinarySession(() => {
       throw new Error("Unexpected native provider acquisition");
     });
@@ -223,11 +232,13 @@ test.each([
     await server.connect(serverTransport);
     await client.connect(clientTransport);
 
-    const response = await client.callTool({
-      name: "inspect_android_package",
-      arguments: { path: apk },
+    await assertOwnedFixturePublicDenial(client, "inspect_android_package", {
+      path: apk,
     });
-    const projected = parseMcpToolError(response).error;
+    expect(launches).toHaveLength(0);
+    const projected = projectOwnedProducerError(
+      await service.execute("inspect_android_package", { path: apk }),
+    ).error;
     expect(projected.code).toBe(errorCode);
     const details = z.record(z.string(), z.unknown()).parse(projected.details);
     const partial = androidPartialObservationSchema.parse(
@@ -282,8 +293,9 @@ it("retains partial JADX replies when owned cleanup also fails", async () => {
   });
 });
 
-it("cleans an active engine when the MCP client disconnects", async () => {
-  const { provider, apk, launches } = await createJadxProtocolFixture("stall");
+it("cleans an active owned engine when the MCP client disconnects after public denial", async () => {
+  const { service, provider, apk, launches } =
+    await createJadxProtocolFixture("stall");
   const session = createTestBinarySession(() => {
     throw new Error("Unexpected native provider acquisition");
   });
@@ -304,12 +316,15 @@ it("cleans an active engine when the MCP client disconnects", async () => {
     InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  const pending = client
-    .callTool({ name: "inspect_android_package", arguments: { path: apk } })
-    .catch(() => undefined);
+  await assertOwnedFixturePublicDenial(client, "inspect_android_package", {
+    path: apk,
+  });
+  expect(launches).toHaveLength(0);
+  const pending = service.execute("inspect_android_package", { path: apk });
+  const settled = expect(pending).resolves.toMatchObject({ ok: false });
   await expect.poll(() => launches.length, { timeout: 10_000 }).toBe(1);
   await client.close();
-  await pending;
+  await settled;
   await expect
     .poll(async () => {
       const workspace = launches[0]?.cwd;

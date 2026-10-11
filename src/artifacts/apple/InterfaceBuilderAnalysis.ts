@@ -28,6 +28,7 @@ import { jsonValueSchema, type JsonValue } from "../../domain/jsonValue.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 
 import { decodeXmlPlistText } from "../../domain/propertyListXmlText.js";
+import { containsCapabilityUnavailableCause } from "../../domain/capabilityFailureCause.js";
 
 const MAX_AGGREGATE_INPUT_BYTES = 32 * 1024 * 1024;
 const MAX_AGGREGATE_DECODE_BYTES = 256 * 1024 * 1024;
@@ -141,6 +142,7 @@ export const analyzeInterfaceBuilderBundle = async (input: {
         });
       } catch (cause: unknown) {
         if (input.signal?.aborted === true) throw cause;
+        if (containsCapabilityUnavailableCause(cause)) throw cause;
         if (cause instanceof InterfaceBuilderDecodeBudgetExceeded) {
           omitted += 1;
           recordOmittedArchive(entry.path, cause.reason);

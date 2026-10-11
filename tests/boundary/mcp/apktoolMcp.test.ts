@@ -1,9 +1,11 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
+import { ApktoolResourceAnalysisService } from "../../../src/application/apktool/ApktoolResourceAnalysisService.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 import type { ApktoolResourceAnalysisPort } from "../../../src/application/apktool/ApktoolResourceAnalysisPort.js";
 import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
-import { parseEvidence } from "../../../src/domain/evidence.js";
 import { ok } from "../../../src/domain/result.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
@@ -43,7 +45,7 @@ const results: Readonly<Record<string, unknown>> = {
   },
 };
 
-it("advertises exact valid Apktool schemas and records inline evidence through MCP", async () => {
+it("advertises exact valid Apktool schemas and retains direct inert-provider Evidence through MCP while public execution is denied", async () => {
   const provider: ApktoolResourceAnalysisPort = {
     async inspectAvailability() {
       return { status: "available", code: null, reason: null, diagnostics: {} };
@@ -53,6 +55,8 @@ it("advertises exact valid Apktool schemas and records inline evidence through M
       return ok(createAnalysisExecution(results[request.operation], identity));
     },
   };
+  const executed = vi.spyOn(provider, "execute");
+  const service = new ApktoolResourceAnalysisService(provider);
   const session = createTestBinarySession(() => {
     throw new Error("deep provider must not start");
   });
@@ -78,15 +82,18 @@ it("advertises exact valid Apktool schemas and records inline evidence through M
 
   assertAdvertisedMcpContracts(operationNames, tools);
 
-  const decoded = await client.callTool({
-    name: "decode_android_resources",
-    arguments: { path: "/targets/probe.apk" },
-  });
-  expect(decoded.isError).not.toBe(true);
-  const text = (decoded.content as { readonly text?: string }[])
-    .map((part) => part.text ?? "")
-    .join("");
-  const evidence = parseEvidence(JSON.parse(text));
+  const input = { path: "/targets/probe.apk" };
+  await assertOwnedFixturePublicDenial(
+    client,
+    "decode_android_resources",
+    input,
+  );
+  expect(executed).not.toHaveBeenCalled();
+  const evidence = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.execute("decode_android_resources", input),
+  );
   expect(evidence.provider.id).toBe("apktool");
   expect(evidence.normalized_result).toMatchObject({
     metadata: { package_name: "com.rea.apktool.probe", version_name: "1.2.3" },

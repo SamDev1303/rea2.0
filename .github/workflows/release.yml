@@ -1,3 +1,5 @@
+# Publication is disabled for REA 2.0 local delivery. Historical steps are retained for attribution and reference only.
+
 name: Release
 
 on:
@@ -23,13 +25,14 @@ env:
   HUSKY: "0"
 
 concurrency:
-  group: release-${{ inputs.release_branch || github.event.pull_request.merge_commit_sha || github.ref_name }}
+  group: release-${{ inputs.release_branch ||
+    github.event.pull_request.merge_commit_sha || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   release-proposal:
     name: Update release proposal
-    if: github.event_name == 'push'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -58,9 +61,7 @@ jobs:
   merged-release:
     name: Release reviewed main merge
     if: >-
-      github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      startsWith(github.event.pull_request.head.ref, 'release-please--branches--main--')
+      ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -129,7 +130,7 @@ jobs:
 
   release-please:
     name: Release Please
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -212,9 +213,8 @@ jobs:
           RELEASE_BRANCH: ${{ inputs.release_branch }}
           SOURCE_SHA: ${{ steps.branch.outputs.sha }}
         run: >-
-          node scripts/verify-release-checkpoint.mjs
-          --phase "$RELEASE_PHASE" --release-branch "$RELEASE_BRANCH"
-          --source-sha "$SOURCE_SHA"
+          node scripts/verify-release-checkpoint.mjs --phase "$RELEASE_PHASE"
+          --release-branch "$RELEASE_BRANCH" --source-sha "$SOURCE_SHA"
 
       - name: Validate manual finalized notes before release creation
         if: inputs.phase == 'publish'
@@ -278,9 +278,9 @@ jobs:
           RELEASE_BRANCH: ${{ inputs.release_branch }}
           SOURCE_SHA: ${{ steps.branch.outputs.sha }}
         run: >-
-          node scripts/verify-release-checkpoint.mjs
-          --phase prepare --stage candidate --release-branch "$RELEASE_BRANCH"
-          --source-sha "$SOURCE_SHA"
+          node scripts/verify-release-checkpoint.mjs --phase prepare --stage
+          candidate --release-branch "$RELEASE_BRANCH" --source-sha
+          "$SOURCE_SHA"
 
       - name: Regenerate release documentation
         if: inputs.phase == 'prepare' && steps.release.outputs.prs_created == 'true'
@@ -294,9 +294,7 @@ jobs:
     name: Publish to npm
     needs: [merged-release, release-please]
     if: >-
-      always() && !cancelled() &&
-      ((needs.merged-release.result == 'success' && needs.merged-release.outputs.release_created == 'true') ||
-      (needs.release-please.result == 'success' && inputs.phase == 'publish' && needs.release-please.outputs.release_created == 'true'))
+      ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -316,7 +314,9 @@ jobs:
       - run: npm ci
 
       - name: Prepare Windows native build toolchain
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y g++-mingw-w64-x86-64
+        run:
+          sudo apt-get update && sudo apt-get install --no-install-recommends -y
+          g++-mingw-w64-x86-64
 
       - name: Build and verify bundled Windows native controls
         run: npm run build:windows-native && npm run verify:windows-native:artifact
@@ -369,9 +369,7 @@ jobs:
     name: Publish to MCP Registry
     needs: [merged-release, release-please, publish]
     if: >-
-      always() && !cancelled() && needs.publish.result == 'success' &&
-      ((needs.merged-release.result == 'success' && needs.merged-release.outputs.release_created == 'true') ||
-      (needs.release-please.result == 'success' && inputs.phase == 'publish' && needs.release-please.outputs.release_created == 'true'))
+      ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

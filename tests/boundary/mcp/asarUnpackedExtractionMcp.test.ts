@@ -1,3 +1,9 @@
+import {
+  createOwnedArtifactProducer,
+  requireOwnedProducerEvidence,
+  projectOwnedProducerError,
+  assertOwnedFixturePublicDenial,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -9,11 +15,11 @@ import { ArtifactProvider } from "../../../src/artifacts/ArtifactProvider.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { createStrippedAsarAddon } from "../../fixtures/strippedAsarAddon.js";
 
-const openArchive = async (archive: string): Promise<Client> => {
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+const openArchive = async (archive: string) => {
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [archive]);
   const server = createServer({ kind: "session", session });
   const client = new Client({ name: "asar-unpacked-extraction", version: "1" });
   const [clientTransport, serverTransport] =
@@ -23,23 +29,21 @@ const openArchive = async (archive: string): Promise<Client> => {
   onTestFinished(async () => {
     await Promise.allSettled([client.close(), server.close(), session.close()]);
   });
-  const opened = await client.callTool({
-    name: "open_binary",
-    arguments: { path: archive },
+  await assertOwnedFixturePublicDenial(client, "open_binary", {
+    path: archive,
   });
-  expect(opened.isError).not.toBe(true);
-  return client;
+  expect(session.activeTarget()).toBeUndefined();
+  expect((await producer.open(archive)).ok).toBe(true);
+  return { client, producer };
 };
 
-it("extracts a rewritten unpacked companion only when the caller records the mismatch", async () => {
+it("directly extracts an owned rewritten unpacked companion only when its mismatch is recorded; public MCP stays denied", async () => {
   const { archive, addon, stripped } = await createStrippedAsarAddon();
-  const client = await openArchive(archive);
+  const { client, producer } = await openArchive(archive);
 
-  const strict = await client.callTool({
-    name: "extract_artifact",
-    arguments: {},
-  });
-  expect(parseMcpToolError(strict).error).toMatchObject({
+  await assertOwnedFixturePublicDenial(client, "extract_artifact", {});
+  const strict = await producer.produce("extract_artifact");
+  expect(projectOwnedProducerError(strict).error).toMatchObject({
     code: "artifact_integrity_mismatch",
     message: expect.stringContaining(
       `Declared ASAR integrity for unpacked entry ${addon} contradicts its companion file; packaging tools commonly sign or strip unpacked native binaries after writing the archive. If expected, rerun extract_artifact with integrity_policy=record-and-continue`,
@@ -47,12 +51,15 @@ it("extracts a rewritten unpacked companion only when the caller records the mis
     details: { logical_path: addon, unpacked: true },
   });
 
-  const continued = await client.callTool({
-    name: "extract_artifact",
-    arguments: { integrity_policy: "record-and-continue" },
+  await assertOwnedFixturePublicDenial(client, "extract_artifact", {
+    integrity_policy: "record-and-continue",
   });
-  expect(continued.isError, JSON.stringify(continued)).not.toBe(true);
-  const evidence = parseEvidence(continued.structuredContent);
+  const continued = requireOwnedProducerEvidence(
+    await producer.produce("extract_artifact", {
+      integrity_policy: "record-and-continue",
+    }),
+  );
+  const evidence = parseEvidence(continued);
   expect(evidence.parameters).toMatchObject({
     integrity_policy: "record-and-continue",
   });
@@ -77,16 +84,14 @@ it("extracts a rewritten unpacked companion only when the caller records the mis
   );
 });
 
-it("names a missing unpacked companion instead of reporting a changed artifact", async () => {
+it("names a missing owned unpacked companion in direct producer diagnostics while MCP stays denied", async () => {
   const { archive, addon } = await createStrippedAsarAddon();
   await rm(join(`${archive}.unpacked`, addon));
-  const client = await openArchive(archive);
+  const { client, producer } = await openArchive(archive);
 
-  const extracted = await client.callTool({
-    name: "extract_artifact",
-    arguments: {},
-  });
-  expect(parseMcpToolError(extracted).error).toMatchObject({
+  await assertOwnedFixturePublicDenial(client, "extract_artifact", {});
+  const extracted = await producer.produce("extract_artifact");
+  expect(projectOwnedProducerError(extracted).error).toMatchObject({
     code: "artifact_operation_failed",
     category: "unavailable",
     message: `ASAR unpacked companion bytes are unavailable for ${addon}. Select the archive in place with its .unpacked directory beside it, then retry.`,

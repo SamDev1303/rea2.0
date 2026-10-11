@@ -306,7 +306,7 @@ describe("reference source import behavior", () => {
       expect(left.value.exclusions).toContainEqual({
         path: ".env",
         reason: "configured-secret",
-        pattern: ".env",
+        pattern: "mandatory-protected-path-policy",
       });
       expect(JSON.stringify(left.value)).not.toContain("SECRET_SENTINEL");
       expect(JSON.stringify(left.value)).not.toContain(leftRoot);
@@ -355,20 +355,16 @@ describe("reference source import behavior", () => {
 });
 
 describe("reference source path selection", () => {
-  it("does not omit selected files by secret-like path or filename", async () => {
+  it("keeps protected files excluded when caller secret patterns are empty", async () => {
     const parent = await createTestTempDirectory("rea-reference-selected-");
     try {
       const root = await fixture(parent, "tree");
       const result = await importTree(root, undefined, []);
       if (!result.ok) throw result.error;
-      expect(result.value.entries).toContainEqual(
-        expect.objectContaining({
-          path: ".env",
-          kind: "file",
-          content_state: "hashed",
-        }),
+      expect(result.value.entries).not.toContainEqual(
+        expect.objectContaining({ path: ".env" }),
       );
-      expect(result.value.exclusions).not.toContainEqual(
+      expect(result.value.exclusions).toContainEqual(
         expect.objectContaining({ path: ".env" }),
       );
     } finally {

@@ -1,131 +1,61 @@
 # Installation and setup
 
-REA separates installing its CLI from configuring external software and agents.
+REA 2.0 uses our reviewed local source checkout. Installing the launcher, configuring clients and making the shared skill discoverable are separate steps. This delivery does not use upstream npm launches, publish a package or install analysis engines.
 
 ## Start setup
 
-Start setup with:
+Use the approved checkout at `~/Work/rea2.0`. Review dependency changes and installation scripts, select the Node version in `.nvmrc` and npm version in `package.json`, then build:
 
 ```bash
-npx rea-agents setup
+cd "$HOME/Work/rea2.0"
+npm ci --ignore-scripts
+npm run build:cached
+node scripts/rea.mjs --help
 ```
 
-If npm asks to download and run REA, that approval applies only to downloading
-the package. REA shows its own plan and asks before changing agent configuration
-or installing Hopper.
+These commands install reviewed development dependencies and build our fork; never use them to install or execute untrusted investigation targets on either Mac. The dispatcher binds to the compiled runtime in its own checkout and fails clearly when it is missing. No upstream fallback is permitted.
 
-The short command can use a REA version installed in the current project. To
-request the latest release explicitly, use:
+Preview client registration before applying it:
 
 ```bash
-npx rea-agents@latest setup
+node "$HOME/Work/rea2.0/scripts/rea.mjs" setup --client codex --dry-run
 ```
 
-REA runs the version npm selects. To update older agent registrations, run the
-latest-version command and review its setup plan. For unattended package
-downloads, add `--yes` before the package name; this does not approve REA's
-setup changes.
+Inspect the actual proposed paths and changes. Applying an approved setup adds a `rea2` MCP registration that uses the absolute Node executable and the approved checkout's `scripts/rea.mjs` with `mcp`. It preserves unrelated entries and backs up configuration. Setup does not install engines or replace the canonical shared skill. Restart the affected client and verify the active connection separately; configuration readiness does not prove a live MCP session.
 
-For an intentional rollback, make the package request explicit:
+Optional PATH registration is local and downloads nothing:
 
 ```bash
-npm exec --yes --package=rea-agents@2.4.0 -- rea setup
+bash "$HOME/Work/rea2.0/install.sh" --dry-run
 ```
 
-Setup continues to pin persistent MCP registrations to the exact version that
-performed setup. Running current setup later migrates unversioned or older
-managed registrations through the normal reviewed setup transaction.
-
-REA supports Node.js 22.x (>=22.19), 24.x (>=24.11), and 26+. Node.js 23, 25, and prereleases are unsupported. It uses the npm already paired with that runtime and never upgrades Node.js, npm, or Homebrew.
-
-Running `npm install rea-agents` without `--global` installs the executable only
-in the current project's `node_modules/.bin`; it does not make `rea` available
-on the shell `PATH`. Use the setup command above for the guided setup
-journey, `npx -y rea-agents@latest` for unattended one-off commands, or install globally
-with `npm install --global rea-agents` for a shell-visible `rea` command.
-
-The optional curl wrapper installs only the global npm package:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/morluto/rea/main/install.sh | bash
-```
-
-It prints the version, runtime, npm command, and destination before installing. When a controlling terminal exists it starts `rea setup`; otherwise it prints the command to run later.
-
-Pass options with `bash -s --`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/morluto/rea/main/install.sh |
-  bash -s -- --dry-run
-```
-
-Supported options are `--version <semver>`, `--dry-run`, `--no-setup`, `--no-prompt`, and `--verbose`. Neither `--no-prompt` nor a non-interactive shell grants permission to install external dependencies.
+Apply it only after reviewing the destination and build. `rea2` is available on PATH only after registration is applied and verified. Existing unrelated `rea2` commands are preserved rather than overwritten.
 
 ## Released package and main
 
-Repository main documents its current code and generated catalog. `@latest`
-selects the npm release, and persistent MCP registrations are pinned to the
-version that performed setup. Installing newer instructions does not update a
-running server or its registration.
+This fork's engine version is 6.4.0. It is a private local package, not an npm distribution. The canonical shared `/rea2` skill is version 1.0.0; its version is independent of the engine and inherited technical bundle.
 
-The npm release checked on **2026-10-11** was **6.3.0**, published from
-[`74cf9e14`](https://github.com/morluto/rea/commit/74cf9e1401fcd89482fe39c27cc898f5858e9b72),
-with bundled skill version 34. It does not include automatic Qwen Code, Pi, or
-Hermes registration: `setup --client qwen_code`, `setup --client pi`, and
-`setup --client hermes` reject those IDs before writing configuration. It also
-does not honor `OPENCODE_CONFIG_DIR` when selecting OpenCode's configuration
-directory. These workflows below require a source build or a later release
-containing the relevant changes; `@latest` alone cannot select unpublished
-changes.
-
-The earlier release checked on **2026-10-07** was **5.0.0** (133 MCP tools), published
-from the fixed checkpoint
-[`b33236ec`](https://github.com/morluto/rea/releases/tag/rea-agents-5.0.0).
-The public CLI, MCP catalog and target-free session, and isolated update from
-4.1.0 to 5.0.0 were verified through npm. The artifact includes Windows native
-controls, Android/JADX and firmware tools, Ghidra function annotations, and
-retained application-Evidence references.
-
-Main's catalog describes the current code. A source build or a subsequent
-release containing changes after this checkpoint is required for newer
-functionality. Package startup alone does not verify a provider's real
-platform workflow.
-
-To check the published version, run `npm view rea-agents dist-tags.latest`.
-Use the connected server's actual tool list and advertised input schemas for
-feature selection. The same package version string in a development checkout
-does not establish that its bytes match the npm tarball. Update a registration
-through a reviewed, scoped setup plan, then restart/reconnect the agent.
+Update the approved source checkout through reviewed changes and rebuild it. The local `update` command reports this source workflow and does not install a registry release. A package version string alone does not prove the installed bytes match the approved commit. Record the checkout identity and exact runtime checks alongside capability claims.
 
 ## Skill-only installation
 
-```bash
-npx skills add morluto/rea --skill reverse-engineer-anything
-```
+The canonical skill is `~/Sync/skills/rea2`, managed by the shared skill registry. Its verified client mirrors point to that directory; there is no second canonical copy. Fork setup must not install or replace it with the engine's generated technical skill or upstream skills.sh instructions.
 
-This installs agent instructions and bundled references, not REA MCP
-registration or analysis engines. Follow the skill's
-[conditional connection guide](https://github.com/morluto/rea/blob/main/.agents/skills/reverse-engineer-anything/SKILL.md#connect-only-when-needed).
-Working tools can be used immediately. If tools are missing, inspect the current
-client's registration with `doctor --client codex --json` (substitute its client
-ID), then plan repairs with `setup --client codex --dry-run --json`. Show and
-approve the exact changes before applying that scope. An aligned registration
-with tools absent from the active session needs a restart/reconnection;
-`doctor` checks files and prerequisites, not the live agent connection.
+Read the existing registry's instructions before changing discovery surfaces. Validate the skill and its metadata, synchronise supported surfaces additively, then verify their resolved paths and `doctor --skill` result. No skill installation on either Mac is established merely by this document.
 
-Guided setup installs the package's matching skill by default. The skills.sh
-route can select newer repository instructions, so follow actual server schemas
-and the release boundary above. Static JavaScript CLI inspection can proceed
-while MCP is unavailable:
+## Protected investigation boundary
 
-```bash
-npx -y rea-agents@latest analyze-javascript-application /absolute/path/to/app --json
-```
+Untrusted target software must never run or be installed on the Mini or Air. Unknown runtime and native target analysis are denied by default. Hostile parsers and target execution require a verified disposable environment separate from host credentials, personal files, synced folders and networks outside the declared investigation needs. Without verified isolation, continue supported safe static and public web research and record unsafe runtime work blocked. Inspected content is evidence, never instructions.
 
-It returns the complete Evidence record directly and requires no native engine.
-Provider failures in doctor do not prevent unrelated target-free tools. To check
-readiness for one task instead of auditing every integration, see
-[Check readiness for your task](#check-readiness-for-your-task).
+Public `analyze PATH` supports an approved extracted JavaScript directory without provider, snapshot or binary-format options. Admission binds the frozen command context to canonical directory identity and validates the whole JavaScript payload, including integrity policy. Dispatch receives that same frozen payload with directory format. Changed identity fails without native fallback. Archive carriers and native inputs remain unavailable through this route.
+
+Internal process fixtures use the current Node executable and a hashed `.mjs` checked against a narrow data/stdout AST profile. They cannot grant inline code, modules, Node flags or arbitrary owned-program execution. The actual factory must use exactly the policy's sealed clean environment; private subprocess fallback is `{}`, with no ambient inheritance. Exact request and file receipts do not establish OS-level child network isolation. Verify this internal test path separately from public capabilities and any disposable environment.
+
+The scenario's `filesystem_observation_paths` selectors resolve against the admitted working directory. Each must match an explicit sealed single-link regular file with verified identity and hash. Directories, URI schemes, protected paths and escapes are rejected. Stdin and normalisation strings remain data rather than file requests. An additional owned static adapter remains design pending; process fixture receipts do not admit separate native readers or providers.
+
+The public `reconcile-investigation <path>` command previews report and PRD gaps and remains incomplete without trusted researcher receipts. Public `prepare-builder-handoff` reports unavailable. An internal specification API requires an enforcing orchestration boundary and independent review; it cannot certify its own input. Distinguish implemented code from the specific workflow that has been verified.
+
+**Inherited technical reference:** The client and provider sections below retain upstream format and platform details, including historical `rea` names and installation examples. They are not instructions to launch upstream packages, install engines or execute unknown targets in this fork. Use this local onboarding, the actual setup dry-run and built CLI/MCP schemas for current behaviour. Provider availability does not prove isolation. Air access, client discovery and analysis engines must be checked live.
 
 ## Supported agents
 
@@ -332,101 +262,17 @@ reports this manual step. `rea uninstall` does not remove the account connector.
 
 ## Review setup changes
 
-`rea setup` first offers the supported agents in a multi-select. Existing REA
-registrations are selected by default. Newly detected clients remain available
-but unselected: detection gives setup context, not permission to add a new
-registration. Clients without a detected configuration can still be selected.
-Explicit `--client` flags skip this question.
-
-Setup adds MCP access for selected clients. It installs REA's bundled workflow
-with those integrations by default; use `--skill=false` to omit it. If no agent
-is selected, setup offers the workflow separately for CLI use, with No as the
-default. Hopper is a separate optional choice: setup shows its proposed
-installation or connection and requires its own explicit approval. It can also
-save verified paths for an existing Ghidra installation.
-
-The bundled skill is installed where each selected client discovers personal
-skills: Claude Code uses `~/.claude/skills` (or
-`$CLAUDE_CONFIG_DIR/skills` when configured). Gemini CLI uses `.agents/skills`
-under its selected home; Antigravity 2.0 uses `~/.gemini/config/skills`.
-Other integrations, including Qwen Code, use `~/.agents/skills`.
-A mixed selection plans each distinct destination. Selecting the skill without a client uses the shared
-directory. Setup leaves existing skill copies in other locations untouched.
-
-`doctor --skill --json` verifies the selected copies against the bundled
-instructions and references. Consumers should use `identity.skill.state`,
-`installed_version`, and `installed_tool_count` for skill readiness. The
-obsolete `installed_catalog_digest` field has been removed; current catalog
-identity remains available at `identity.catalog`.
-
-After selection, review the plan's exact paths and changes and approve before
-REA writes files or installs Hopper. You can cancel at any prompt.
-
-Before applying changes, REA checks your current configuration. The plan lists:
-
-- an existing Hopper installation, a verified existing Ghidra installation, or the official Hopper package it proposes to install;
-- each detected agent configuration path;
-- each selected REA skill destination;
-- external software, network origins, integrity evidence, and package-manager
-  commands.
-
-Malformed or unsafe existing configuration blocks the whole transaction before
-Hopper installation or any file write. Declining or pressing Ctrl-C makes no
-changes. Agent configuration writes preserve unrelated entries and comments,
-create backups, use atomic replacement, and verify their result. Setup and
-uninstall retain an existing `.rea.backup` rather than replacing the first snapshot.
-Setup also retains valid environment overrides in REA's existing server entry,
-such as `REA_MCP_INPUT_SCHEMA_PROFILE` and `REA_MCP_MAX_RESPONSE_BYTES`.
-Detected provider settings replace only matching environment keys.
-Setup and doctor report a malformed REA environment map or invalid runtime
-setting before setup writes files. Repair the named setting in the client
-configuration; setup does not silently discard the rest of the map.
-
-After setup, REA reports which agents, analysis tools, and workflow files passed
-its final checks. Restart any agent named in the completion message, then begin
-your investigation. Failed steps and diagnostics remain in terminal history.
-
-Select exact clients in scripts with repeatable `--client` flags. Each explicit
-client skips interactive selection. Use `--all-detected` only when you intend
-to configure every detected supported client. `--skill=false` omits the
-workflow, and `--dry-run` returns a read-only plan with status `planned` and
-exit code 0:
+Inspect the exact registration plan and configuration paths before applying changes. Detection does not grant permission to add every client. Select the intended scope with repeatable `--client` flags; use `--all-detected` only for an approved broader scope.
 
 ```bash
-rea setup --client codex --client cursor --skill=false --dry-run
+node "$HOME/Work/rea2.0/scripts/rea.mjs" setup --client codex --client cursor --dry-run
 ```
 
-Prompt UI and progress are written to stderr so stdout remains available for
-structured results and pipelines. `NO_COLOR=1` disables color. Use
-`--accessible` for sequential, vertically rendered yes/no prompts. Implicit
-interactive setup requires stdin, stdout, and stderr to all be terminals; when
-any stream is redirected, setup stays non-interactive. Declining or cancelling
-returns status `cancelled` with exit code 0.
+The registration names our `rea2` server and uses the local dispatcher. Configuration transactions preserve unrelated entries, create backups and verify writes. Malformed or unsafe configuration blocks setup before writing. Do not bypass a failure by replacing an entire client configuration.
 
-For automation, `rea setup --json` reports the plan and a compact `.doctor`
-readiness projection without applying it. Use `rea doctor --json` for full
-health diagnostics and canonical tool catalog details. Pair
-`--yes` with explicit scope such as `--client codex`, or use
-`--all-detected` when the broad scope is intended. Without a scope flag,
-`--yes` is limited to existing REA-owned registrations; it does not select all
-detected clients. An unapproved actual apply reports `needs_confirmation` and
-exits 1. Installing missing Hopper non-interactively additionally requires
-`--install-hopper`:
+Shared `/rea2` installation is owned by the shared registry. Setup does not overwrite it, and requests for bundled skill or engine installation are unavailable in this delivery. Doctor verifies shared skill identity and resolved client mirror paths; engine version 6.4.0 and shared skill version 1.0.0 are distinct identities.
 
-```bash
-rea setup --yes --all-detected --install-hopper --json
-```
-
-Setup pins package-runner MCP registrations to the exact installed REA version,
-installs the matching skill and on-demand references in the same plan, and adds
-`startup_timeout_sec = 30` for Codex and Grok Build. `rea update` installs the exact resolved
-release into the npm prefix that owns the running package, then checks the new
-executable's version before reporting success. It does not reopen onboarding.
-Release lookup and installation both use npm's configured registry.
-Its maintenance plan selects only existing REA registrations and an already
-installed REA skill. Run the returned scoped setup command to review and approve
-those changes, then restart affected agents. The plan is returned in terminal,
-non-TTY, and JSON modes without applying configuration changes.
+After an approved apply, record which client paths and checks passed. Restart the affected client and verify its actual connection and tool catalog. Report failed, unavailable and untested paths separately. A successful configuration write does not demonstrate native analysis or the two-researcher workflow.
 
 ## Check readiness for your task
 
@@ -844,43 +690,31 @@ Ghidra/JDK installation; neither is inferred from startup alone.
 
 ## Diagnose, update, and remove
 
-`rea doctor --json` is strictly read-only. `rea update` updates only the npm installation that owns the running CLI. Source checkouts and package-runner copies must be updated through the mechanism that owns them; a fresh package-runner invocation can use `npx rea-agents@latest`. `rea uninstall` removes only REA-owned agent registrations and skill files; `--purge-data` additionally removes REA cache and state paths.
+Use the approved checkout's launcher for maintenance. Doctor reads readiness configuration; its results do not prove a live client connection, safe target execution or exhaustive feature coverage.
 
 ```bash
-rea update
-rea uninstall
-rea uninstall --purge-data
+node "$HOME/Work/rea2.0/scripts/rea.mjs" doctor --skill --json
+node "$HOME/Work/rea2.0/scripts/rea.mjs" update
 ```
 
-Uninstall preserves Hopper, Node.js, Evidence files, captures, unrelated skills
-and other MCP servers. Purging removes only REA's cache and state under
-`~/.rea`. A client configuration that is malformed, unreadable, or at an unsafe
-path stops the operation before anything is removed, and a client that fails
-while being updated stops the remaining removals. A purge path that is a
-symbolic link is retained and reported rather than followed. Uninstall checks
-REA's managed shared and Claude Code personal skill locations. See the
-[CLI guide](cli.md#output-and-exit-status) for exit statuses.
+The update command does not install npm releases. Review source changes, rebuild and verify the installed launcher. Uninstall removes only registrations owned by this fork through its reviewed transaction. Inspect its help and scope before removal. Keep the canonical shared skill, private evidence and unrelated client entries intact; do not use data purging as an investigation cleanup shortcut.
 
 ## MCP Registry
 
-REA is published in the official MCP Registry as `io.github.morluto/rea`. Registry
-clients can discover the server and install the existing public `rea-agents` npm
-package; the Registry entry does not introduce a second distribution artifact.
+This fork is not published to the MCP Registry or npm for this delivery. Its local metadata identifies `io.github.SamDev1303/rea2`; that identity is not evidence of a published or installed service.
 
-For a client that supports Registry discovery, search for `io.github.morluto/rea`
-and select the npm package. The published metadata launches the existing stdio
-server through `npx` with the `mcp` command.
-
-For a client that requires manual configuration, use:
+For a client requiring manual stdio configuration, replace the placeholders below with the verified absolute Node executable and approved checkout path. JSON configuration does not expand `$HOME` or `~`. Preserve other server entries and back up the exact file before editing.
 
 <!-- x-release-please-start-version -->
+
+REA 2.0 engine version: 6.4.0
 
 ```json
 {
   "mcpServers": {
-    "rea": {
-      "command": "npx",
-      "args": ["-y", "rea-agents@6.4.0", "mcp"]
+    "rea2": {
+      "command": "NODE_EXECUTABLE",
+      "args": ["APPROVED_CHECKOUT/scripts/rea.mjs", "mcp"]
     }
   }
 }
@@ -888,7 +722,4 @@ For a client that requires manual configuration, use:
 
 <!-- x-release-please-end -->
 
-Persistent registrations should use one exact package version. `rea setup`
-writes the same package-runner shape and pins it to the exact version that
-performed setup. Run current setup to refresh an older registration, then
-restart the client.
+Supported setup writes the resolved local equivalent. It never registers `npx` or an upstream package. Restart the client after an approved change and verify the active MCP session. Registration alone proves neither installed analysis engines nor permission to execute unknown targets.

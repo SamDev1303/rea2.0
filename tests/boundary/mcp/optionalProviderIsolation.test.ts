@@ -1,4 +1,11 @@
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
+import type { Client } from "@modelcontextprotocol/client";
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
+import { buildCapabilityInventory } from "../../../src/application/CapabilityInventory.js";
+import { optionalProviderUnavailable } from "../../../src/application/OptionalObservationProviders.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
+import { listBrowserTargets } from "../../../src/application/BrowserObservationService.js";
+import { listJavaScriptRuntimeTargets } from "../../../src/application/javascript/JavaScriptRuntimeObservationService.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -111,7 +118,7 @@ const boot = async (factories: OptionalObservationFactories) => {
 };
 
 mcpTest.for(failedAdapters)(
-  "isolates %s and retains successful peers",
+  "isolates %s in the raw provider inventory and retains direct peer Evidence while public execution remains denied",
   async ([port, operation, providerId], { mcp }) => {
     const calls: string[] = [];
     const failure = `${port} synthetic import failure`;
@@ -136,66 +143,76 @@ mcpTest.for(failedAdapters)(
     const example = toolContract(operation).examples[0];
     if (example === undefined)
       throw new Error(`Missing example for ${operation}`);
-    const unavailable = await client.callTool({
-      name: operation,
-      arguments: example.input,
-    });
-    expect(unavailable.isError).toBe(true);
-    expect(parseMcpToolError(unavailable)).toMatchObject({
-      error: {
-        details: {
-          provider_id: providerId,
-          operation,
-          reason: `Adapter could not load: ${failure}`,
-        },
+    await assertOwnedFixturePublicDenial(client, operation, example.input);
+    expect(calls).toEqual([]);
+    const loadFailure = connected.loaded.optionalProviderLoadFailures?.[port];
+    if (loadFailure === undefined)
+      throw new Error("Missing actual captured load failure");
+    expect(
+      projectAnalysisError(optionalProviderUnavailable(loadFailure, operation)),
+    ).toMatchObject({
+      details: {
+        provider_id: providerId,
+        operation,
+        reason: `Adapter could not load: ${failure}`,
       },
     });
-    const status = await client.callTool({
-      name: "binary_session",
-      arguments: {},
+    const rawInventory = buildCapabilityInventory(connected.session.status(), {
+      processCaptureEnabled: true,
+      browserObservationEnabled: true,
+      browserScenarioEnabled: true,
+      electronObservationEnabled: true,
+      electronAutomationEnabled: true,
+      v8InspectorObservationEnabled: true,
+      optionalProviderLoadFailures:
+        connected.loaded.optionalProviderLoadFailures ?? {},
     });
-    expect(status.structuredContent).toMatchObject({
-      result: {
-        tool_availability: expect.arrayContaining([
-          expect.objectContaining({
-            name: operation,
-            available: false,
-            reason: "provider_unavailable",
-            remediation: expect.stringContaining(failure),
-          }),
-          expect.objectContaining({
-            name: "analyze_javascript_application",
-            available: true,
-          }),
-          expect.objectContaining({
-            name: "reconcile_javascript_runtime",
-            available: true,
-          }),
-          expect.objectContaining({
-            name:
-              port === "electronActiveObservation"
-                ? "list_electron_targets"
-                : "capture_electron_scenario",
-            available: true,
-          }),
-        ]),
-      },
-    });
+    expect(rawInventory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: operation,
+          available: false,
+          reason: "provider_unavailable",
+          remediation: expect.stringContaining(failure),
+        }),
+        expect.objectContaining({
+          name:
+            port === "electronActiveObservation"
+              ? "list_electron_targets"
+              : "capture_electron_scenario",
+          available: true,
+        }),
+      ]),
+    );
+    await verifyProtectedOptionalStatus(client, port, operation);
     const healthy =
       port === "javascriptRuntimeObservation"
         ? "list_browser_targets"
         : "list_javascript_runtime_targets";
-    const listed = await client.callTool({
-      name: healthy,
-      arguments:
-        healthy === "list_browser_targets"
-          ? { cdp_endpoint: "http://127.0.0.1:9222" }
-          : { inspector_endpoint: "http://127.0.0.1:9222" },
-    });
-    expect(listed.isError).not.toBe(true);
+    const input =
+      healthy === "list_browser_targets"
+        ? { cdp_endpoint: "http://127.0.0.1:9222" }
+        : { inspector_endpoint: "http://127.0.0.1:9222" };
+    await assertOwnedFixturePublicDenial(client, healthy, input);
+    expect(calls).toEqual([]);
+    const listed = await retainOwnedServiceEvidence(
+      connected.session,
+      client,
+      healthy === "list_browser_targets"
+        ? await listBrowserTargets(
+            connected.loaded.browserObservation,
+            toolContract("list_browser_targets").inputSchema.parse(input),
+          )
+        : await listJavaScriptRuntimeTargets(
+            connected.loaded.javascriptRuntimeObservation,
+            toolContract("list_javascript_runtime_targets").inputSchema.parse(
+              input,
+            ),
+          ),
+    );
     const evidenceId = z
       .object({ evidence_id: z.string() })
-      .parse(listed.structuredContent).evidence_id;
+      .parse(listed).evidence_id;
     expect(connected.session.evidenceById(evidenceId)?.operation).toBe(healthy);
     expect(calls).toEqual([
       port === "javascriptRuntimeObservation" ? "browser" : "runtime",
@@ -262,3 +279,42 @@ mcpTest(
     expect(second.loaded.browserObservation).toBeDefined();
   },
 );
+
+const verifyProtectedOptionalStatus = async (
+  client: Client,
+  port: string,
+  operation: string,
+): Promise<void> => {
+  const status = await client.callTool({
+    name: "binary_session",
+    arguments: {},
+  });
+  expect(status.structuredContent).toMatchObject({
+    result: {
+      tool_availability: expect.arrayContaining([
+        expect.objectContaining({
+          name: operation,
+          available: false,
+          reason: "unsupported_host",
+          remediation: expect.any(String),
+        }),
+        expect.objectContaining({
+          name: "analyze_javascript_application",
+          available: true,
+        }),
+        expect.objectContaining({
+          name: "reconcile_javascript_runtime",
+          available: true,
+        }),
+        expect.objectContaining({
+          name:
+            port === "electronActiveObservation"
+              ? "list_electron_targets"
+              : "capture_electron_scenario",
+          available: false,
+          reason: "unsupported_host",
+        }),
+      ]),
+    },
+  });
+};

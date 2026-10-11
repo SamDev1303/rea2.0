@@ -83,7 +83,7 @@ describe("additional client configuration dialects", () => {
     if (name === "vscode" || name === "omp" || name === "pi")
       expect(registration).toMatchObject({
         type: "stdio",
-        command: "npx",
+        command: command[0],
         args: command.slice(1),
       });
     if (name === "copilot_cli")
@@ -92,7 +92,7 @@ describe("additional client configuration dialects", () => {
       expect(registration).toMatchObject({
         transport: "stdio",
         enabled: true,
-        command: "npx",
+        command: command[0],
         args: command.slice(1),
       });
 
@@ -161,7 +161,7 @@ describe("additional client configuration dialects", () => {
     expect(removedErrors).toEqual([]);
     expect(removedText).toContain("// Client-wide preferences stay intact.");
     expect(removedText).toContain("// An independently managed server.");
-    expect((removed.mcp as Record<string, unknown>).rea).toBeUndefined();
+    expect((removed.mcp as Record<string, unknown>).rea2).toBeUndefined();
     expect((removed.mcp as Record<string, unknown>).other).toBeDefined();
   });
 
@@ -170,7 +170,7 @@ describe("additional client configuration dialects", () => {
     const client = getClients(home).find(({ name }) => name === "opencode");
     if (client === undefined) throw new Error("missing OpenCode client");
     await mkdir(client.markerPath ?? home, { recursive: true });
-    const invalid = '{ "mcp": { /* broken */ "rea": [ }';
+    const invalid = '{ "mcp": { /* broken */ "rea2": [ }';
     await writeFile(client.configPath, invalid);
 
     expect(await configureClientConfiguration(client, {}, command)).toEqual({
@@ -213,7 +213,7 @@ describe("OpenCode V2 native server table", () => {
       // An independently managed server.
       "other": { "type": "local", "command": ["node", "other.js"] },
     },
-    "rea": ${legacyEntry},
+    "rea2": ${legacyEntry},
   },
 }\n`,
     );
@@ -231,7 +231,7 @@ describe("OpenCode V2 native server table", () => {
       timeout: { catalog: 30000 },
       servers: {
         other: { type: "local", command: ["node", "other.js"] },
-        rea: { type: "local", command: [...command] },
+        rea2: { type: "local", command: [...command] },
       },
     });
     expect(await readClientRegistrationStatuses(home)).toEqual(
@@ -260,7 +260,7 @@ describe("OpenCode V2 native server table", () => {
     const stale = ["npx", "-y", `${PRODUCT_IDENTITY.packageName}@3.2.0`, "mcp"];
     await writeFile(
       client.configPath,
-      `${JSON.stringify({ mcp: { servers: { rea: { type: "local", command: stale } } } })}\n`,
+      `${JSON.stringify({ mcp: { servers: { rea2: { type: "local", command: stale } } } })}\n`,
     );
 
     expect(await readClientRegistrationStatuses(home)).toEqual(
@@ -274,7 +274,7 @@ describe("OpenCode V2 native server table", () => {
     expect(
       parseOpenCode(await readFile(client.configPath, "utf8")).mcp,
     ).toEqual({
-      servers: { rea: { type: "local", command: [...command] } },
+      servers: { rea2: { type: "local", command: [...command] } },
     });
     expect((await systemUninstallHost(home).removeClient(client)).status).toBe(
       "removed",
@@ -290,7 +290,7 @@ describe("OpenCode V2 native server table", () => {
     const { home, client } = await openCodeClient("rea-opencode-mixed-");
     await writeFile(
       client.configPath,
-      `{ "mcp": { "servers": {}, "rea": ${legacyEntry} } }\n`,
+      `{ "mcp": { "servers": {}, "rea2": ${legacyEntry} } }\n`,
     );
 
     expect(await readClientRegistrationStatuses(home)).toEqual(
@@ -317,7 +317,7 @@ describe("OpenCode V2 native server table", () => {
     const typeServer = { type: "local", command: ["node", "type.js"] };
     await writeFile(
       client.configPath,
-      `${JSON.stringify({ mcp: { servers: { type: typeServer, rea: { type: "local", command } } } })}\n`,
+      `${JSON.stringify({ mcp: { servers: { type: typeServer, rea2: { type: "local", command } } } })}\n`,
     );
 
     expect(await readClientRegistrationStatuses(home)).toEqual(
@@ -354,7 +354,7 @@ describe("OpenCode V2 native server table", () => {
       parseOpenCode(await readFile(client.configPath, "utf8")).mcp,
     ).toEqual({
       servers,
-      rea: { type: "local", command: [...command], enabled: true },
+      rea2: { type: "local", command: [...command], enabled: true },
     });
   });
 });
@@ -474,7 +474,7 @@ describe("platform-aware client config paths", () => {
     );
   });
 
-  it("recognizes prior exact REA releases while rejecting foreign package commands", () => {
+  it("rejects prior npm releases and foreign package commands", () => {
     expect(
       isOwnedClientRegistrationCommand([
         "npx",
@@ -482,7 +482,7 @@ describe("platform-aware client config paths", () => {
         `${PRODUCT_IDENTITY.packageName}@3.2.0`,
         "mcp",
       ]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isOwnedClientRegistrationCommand(["npx", "-y", "another-package", "mcp"]),
     ).toBe(false);

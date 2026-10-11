@@ -5,6 +5,9 @@ import { describe, expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { registerUtilityCommands } from "../../../src/cli/utilityCommands.js";
+import { silentLogger } from "../../../src/logger.js";
 
 const unsupportedHostOutput = {
   error: "Import failed",
@@ -165,7 +168,7 @@ describe("compiled reference-source import preflight failures", () => {
       await mkdir(root, { recursive: true });
       await chmod(parent, 0);
       try {
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: ["import-reference-source", root, "--json"],
           cwd: directory,
           environment: {
@@ -175,6 +178,26 @@ describe("compiled reference-source import preflight failures", () => {
             XDG_CACHE_HOME: directory,
           },
         });
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await serveRegisteredCliFixture(
+          (fixture) => {
+            registerUtilityCommands(
+              fixture,
+              silentLogger,
+              {},
+              {
+                runSessionStatus: async () => {
+                  throw new Error("Status acquisition forbidden");
+                },
+                runProviderAnalysis: async () => {
+                  throw new Error("Native acquisition forbidden");
+                },
+              },
+            );
+          },
+          ["import-reference-source", root, "--json"],
+        );
         expect(result.json).toMatchObject({
           error: "Import failed",
           category: "execution_failure",

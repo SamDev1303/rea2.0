@@ -1,9 +1,13 @@
-import { silentLogger } from "../../../src/logger.js";
 import { expect } from "vitest";
 import { z } from "zod";
 
-import { createBinarySession } from "../../../src/composition/binary.js";
-import { parseConfig } from "../../../src/config/parseConfig.js";
+import { createOwnedAppleStaticSession } from "../../../src/composition/OwnedAppleStaticSession.js";
+import {
+  attachOwnedFixturePolicy,
+  digestOwnedFixtureInput,
+  sealOwnedFixturePolicy,
+} from "../../../src/application/investigationSafety/OwnedFixturePolicy.js";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { keyedArchiveResultSchema } from "../../../src/domain/apple/keyedArchive.js";
 import { createServer } from "../../../src/server/createServer.js";
 import {
@@ -17,19 +21,41 @@ mcpTest.for(archiveNumberMetadataCases)(
   "MCP preserves numeric meaning for $name",
   async (item, { mcp, onTestFinished }) => {
     const fixture = await keyedArchiveNumberMetadataFixture(item);
-    const configured = parseConfig({ REA_ANALYSIS_PROVIDER: "auto" });
-    if (!configured.ok) throw configured.error;
-    const session = createBinarySession(
-      configured.value,
-      silentLogger,
-      process.env,
-    );
+    const session = createOwnedAppleStaticSession();
     onTestFinished(async () => {
       await session.close();
     });
-    const client = await mcp.connect(
-      createServer({ kind: "session", session }),
+    const server = createServer({ kind: "session", session });
+    const portId = "controller-owned-apple-static-port";
+    const capability = "owned-apple-static-fixture";
+    const requests = [
+      { name: "open_binary" as const, arguments: { path: fixture.path } },
+      { name: "inspect_keyed_archive" as const, arguments: {} },
+    ];
+    const token = await sealOwnedFixturePolicy(
+      {
+        roots: [fixture.root],
+        files: [
+          { path: fixture.path, sha256: fixture.digest, role: "dependency" },
+        ],
+        static_inventory: { directories: [] },
+        endpoints: [],
+        environment: [],
+        available_capabilities: [capability],
+        grants: requests.map((request) => ({
+          operation: request.name,
+          input_digest: digestOwnedFixtureInput(
+            toolContract(request.name).inputSchema.parse(request.arguments),
+          ),
+          capability,
+          mode: "owned-static",
+          port_id: portId,
+        })),
+      },
+      { owned_static_ports: [{ port_id: portId, reference: session }] },
     );
+    attachOwnedFixturePolicy(server, token, session);
+    const client = await mcp.connect(server);
     const opened = await client.callTool({
       name: "open_binary",
       arguments: { path: fixture.path },

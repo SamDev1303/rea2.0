@@ -5,6 +5,7 @@ import { expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { seedSharedSkillFixture } from "../../support/investigation/sharedSkillFixture.js";
 
 cliTest(
   "keeps Qwen profile registration and shared skill consistent through setup, doctor and uninstall",
@@ -21,6 +22,10 @@ cliTest(
       "SKILL.md",
     );
     const environment = { USERPROFILE: home, QWEN_HOME: profile };
+    const shared = await seedSharedSkillFixture(
+      home,
+      join(home, ".agents/skills"),
+    );
     const original =
       '{\n  // Keep my configuration.\n  "model": {"name": "existing"},\n  "mcpServers": {"other": {"command": "other-server"}}\n}\n';
     await mkdir(profile, { recursive: true });
@@ -32,13 +37,7 @@ cliTest(
     expect(plan.exitCode, plan.stderr).toBe(0);
     expect(plan.json).toMatchObject({
       status: "planned",
-      plannedActions: [
-        { kind: "configure_client", target: settings },
-        {
-          kind: "install_skill",
-          target: join(home, ".agents", "skills", "reverse-engineer-anything"),
-        },
-      ],
+      plannedActions: [{ kind: "configure_client", target: settings }],
     });
     expect(await readFile(settings, "utf8")).toBe(original);
     await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
@@ -53,21 +52,14 @@ cliTest(
       model: { name: "existing" },
       mcpServers: {
         other: { command: "other-server" },
-        rea: {
-          command:
-            process.platform === "win32"
-              ? process.execPath
-              : resolve("scripts/rea.mjs"),
-          args:
-            process.platform === "win32"
-              ? [resolve("scripts/rea.mjs"), "mcp"]
-              : ["mcp"],
+        rea2: {
+          command: process.execPath,
+          args: [resolve("scripts/rea.mjs"), "mcp"],
         },
       },
     });
-    expect(await readFile(skill, "utf8")).toContain(
-      "name: reverse-engineer-anything",
-    );
+    await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(shared.path, "utf8")).toBe(shared.content);
 
     const doctor = await run(["doctor", "--client", "qwen_code", "--skill"]);
     expect(doctor.exitCode, doctor.stderr).toBe(0);
@@ -88,6 +80,7 @@ cliTest(
       mcpServers: { other: { command: "other-server" } },
     });
     await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(shared.path, "utf8")).toBe(shared.content);
     await expect(access(join(home, ".qwen"))).rejects.toMatchObject({
       code: "ENOENT",
     });

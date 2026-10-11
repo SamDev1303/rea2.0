@@ -9,8 +9,13 @@ import pino from "pino";
 import { expect, onTestFinished } from "vitest";
 import { z } from "zod";
 import { analysisCliErrorEnvelopeSchema } from "../../../src/contracts/errorSchemas.js";
+import { processScenarioSchema } from "../../../src/domain/process/processScenario.js";
+import { captureProcessScenario } from "../../../src/process/capture/ProcessHarness.js";
+import { ProcessCaptureResourceScope } from "../../../src/process/capture/ProcessCaptureLifecycle.js";
 import { cleanupOwnedProcessGroup } from "../../../src/process/ProcessOwnership.js";
 import { createServer } from "../../../src/server/createServer.js";
+import { logToolExecution } from "../../../src/server/toolLogging.js";
+import { processTest } from "../../support/process/processFixture.js";
 import {
   createDeferred,
   createTestBinarySession,
@@ -22,6 +27,15 @@ const fixture = fileURLToPath(
   new URL("../../fixtures/processCaptureCancellation.mjs", import.meta.url),
 );
 const exec = promisify(execFile);
+// This is controller-authored test code, not a target or a public execution
+// grant. It exercises the same command cancellation helper and capture service
+// with real process signals, in the declared synthetic temporary workspace.
+const commandWorker = (scenario: string): string => `
+import { captureProcessScenarioFile } from ${JSON.stringify(new URL("../../../dist/application/process/ProcessCli.js", import.meta.url).href)};
+import { withCommandCancellation } from ${JSON.stringify(new URL("../../../dist/cli/commandCancellation.js", import.meta.url).href)};
+const result = await withCommandCancellation(signal => captureProcessScenarioFile(${JSON.stringify(scenario)}, {}, signal));
+process.stdout.write(JSON.stringify(result));
+`;
 const markerSchema = z.object({
   rootPid: z.number().int().positive(),
   childPid: z.number().int().positive().optional(),
@@ -75,7 +89,7 @@ const cleanupFixture = async (marker: Marker | undefined): Promise<void> => {
 };
 
 itWithCaptureCapability.each(["SIGINT", "SIGTERM"] as const)(
-  "awaits owned workload cleanup and emits a typed CLI cancellation after %s",
+  "awaits owned capture service cleanup and emits a typed command cancellation after %s",
   async (signal) => {
     const root = await createTestTempDirectory("rea-process-cli-cancel-");
     const scenario = join(root, "scenario.json");
@@ -91,8 +105,8 @@ itWithCaptureCapability.each(["SIGINT", "SIGTERM"] as const)(
     );
     const cli = spawn(
       process.execPath,
-      ["scripts/rea.mjs", "capture-process", scenario, "--format", "json"],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      ["--input-type=module", "--eval", commandWorker(scenario)],
+      { cwd: root, env: {}, stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
     cli.stdout.on("data", (chunk: Buffer) => {
@@ -135,14 +149,11 @@ itWithCaptureCapability.each(["SIGINT", "SIGTERM"] as const)(
 );
 
 itWithCaptureCapability(
-  "stops the owned descendant when an MCP request is cancelled during post-exit settlement",
+  "stops the owned descendant when the direct capture service is cancelled during post-exit settlement",
   async () => {
     const root = await createTestTempDirectory(
       "rea-process-mcp-settle-cancel-",
     );
-    const session = createTestBinarySession(() => {
-      throw new Error("Process capture must not launch a binary provider");
-    });
     const completed = createDeferred<string>();
     const completionSchema = z.object({
       tool: z.string(),
@@ -163,14 +174,92 @@ itWithCaptureCapability(
         },
       },
     );
-    const server = createServer({ kind: "session", session }, { logger });
-    const client = new Client({
-      name: "process-settlement-cancellation",
-      version: "1",
-    });
+    const resourceScope = new ProcessCaptureResourceScope();
     let marker: Marker | undefined;
     onTestFinished(async () => {
       await cleanupFixture(marker);
+      await resourceScope.close();
+    });
+    const controller = new AbortController();
+    const scenario = processScenarioSchema.parse({
+      executable: process.execPath,
+      arguments: [fixture, "settlement", root],
+      working_directory: root,
+      timeout_ms: 15_000,
+      idle_timeout_ms: 15_000,
+      settle_ms: 10_000,
+    });
+    const call = logToolExecution(logger, "capture_process_scenario", () =>
+      captureProcessScenario(
+        scenario,
+        controller.signal,
+        process.platform,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        resourceScope,
+      ),
+    );
+    marker = await Promise.race([
+      readMarker(root),
+      call.then(() => {
+        throw new Error("Owned capture completed before its readiness marker");
+      }),
+    ]);
+    if (marker.childPid === undefined)
+      throw new Error("Settlement fixture did not report its descendant");
+    await waitForExit(marker.rootPid);
+    expect(await isRunning(marker.childPid)).toBe(true);
+    // The root has exited while the descendant keeps its owned group alive.
+    await delay(100);
+    controller.abort(new Error("cancel settlement fixture"));
+    const cancelled = await call;
+    expect(cancelled.ok).toBe(false);
+    if (cancelled.ok) throw new Error("Owned capture ignored cancellation");
+    expect(cancelled.error).toMatchObject({
+      reason: "cancelled",
+      cleanupIncomplete: false,
+    });
+    await waitForExit(marker.childPid);
+    expect(await completed.promise).toBe("error");
+    await expect(access(join(root, "late-write"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await resourceScope.close();
+  },
+  20_000,
+);
+
+processTest(
+  "public CLI and MCP deny the advanced fixture before any workload starts",
+  async ({ processes }) => {
+    const root = await createTestTempDirectory("rea-process-public-denial-");
+    const scenario = processScenarioSchema.parse({
+      executable: process.execPath,
+      arguments: [fixture, "settlement", root],
+      working_directory: root,
+    });
+    const path = join(root, "scenario.json");
+    await writeFile(path, JSON.stringify(scenario));
+    const cli = await processes.run(
+      process.execPath,
+      ["scripts/rea.mjs", "capture-process", path, "--json"],
+      { env: { REA_LOG_LEVEL: "silent" }, timeoutMs: 10000 },
+    );
+    expect(cli.exitCode).toBe(1);
+    expect(JSON.parse(cli.stdout)).toMatchObject({
+      code: "capability_unavailable",
+    });
+    const session = createTestBinarySession(() => {
+      throw new Error("Denied capture must not launch a provider");
+    });
+    const server = createServer(
+      { kind: "session", session },
+      { logger: pino({ level: "silent" }) },
+    );
+    const client = new Client({ name: "capture-public-denial", version: "1" });
+    onTestFinished(async () => {
       await client.close();
       await server.close();
       await session.close();
@@ -179,37 +268,20 @@ itWithCaptureCapability(
       InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const controller = new AbortController();
-    const call = client.callTool(
-      {
-        name: "capture_process_scenario",
-        arguments: {
-          executable: process.execPath,
-          arguments: [fixture, "settlement", root],
-          working_directory: root,
-          timeout_ms: 15_000,
-          idle_timeout_ms: 15_000,
-          settle_ms: 10_000,
-        },
-      },
-      { signal: controller.signal },
-    );
-    const cancelled = expect(call).rejects.toThrow("cancel settlement fixture");
-    marker = await readMarker(root);
-    if (marker.childPid === undefined)
-      throw new Error("Settlement fixture did not report its descendant");
-    await waitForExit(marker.rootPid);
-    expect(await isRunning(marker.childPid)).toBe(true);
-    // The root has exited while the descendant keeps its owned group alive.
-    await delay(100);
-    controller.abort(new Error("cancel settlement fixture"));
-    await cancelled;
-    await waitForExit(marker.childPid);
-    expect(await completed.promise).toBe("error");
+    // Denial is a successful MCP response carrying a typed tool error, not a
+    // cancelled client promise. Assert the actual response immediately.
+    const denied = await client.callTool({
+      name: "capture_process_scenario",
+      arguments: scenario,
+    });
+    expect(denied.isError).toBe(true);
+    expect(JSON.stringify(denied)).toContain("capability_unavailable");
+    await expect(access(join(root, "ready.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(access(join(root, "late-write"))).rejects.toMatchObject({
       code: "ENOENT",
     });
     await client.ping();
   },
-  20_000,
 );

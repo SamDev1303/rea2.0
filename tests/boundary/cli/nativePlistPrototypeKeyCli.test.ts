@@ -6,6 +6,7 @@ import { describe, expect } from "vitest";
 import { thinMach } from "../../../src/domain/binaryTarget.fixture.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { inspectSyntheticPlist } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const OMITTED =
   "1 dictionary entry keyed __proto__ was omitted because REA results cannot represent that key.";
@@ -31,22 +32,29 @@ describe.skipIf(process.platform !== "darwin")(
           join(contents, "Info.plist"),
           `<plist><dict><key>CFBundleExecutable</key><string>App</string><key>__proto__</key><dict><key>polluted</key><true/></dict>${extra}</dict></plist>`,
         );
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: ["inspect-plist", app, "--json"],
           environment: {
             REA_LOG_LEVEL: "silent",
             REA_ANALYSIS_PROVIDER: "auto",
           },
         });
-        expect(result.exitCode).toBe(0);
-        expect(result.json).toMatchObject({
-          normalized_result: {
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist({
+          path: join(app, "Contents/MacOS/App"),
+          app,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw result.error;
+        expect(result.value).toMatchObject({
+          result: {
             value: { CFBundleExecutable: "App" },
             bundle: { executable: "App" },
             limitations: expect.arrayContaining([OMITTED]),
           },
         });
-        expect(JSON.stringify(result.json)).not.toContain("polluted");
+        expect(JSON.stringify(result.value.result)).not.toContain("polluted");
       },
     );
   },

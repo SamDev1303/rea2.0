@@ -2,6 +2,8 @@
 
 [English](README.md) · [简体中文](README_zh.md) · **繁體中文** · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
 
+> **Historical upstream translation:** Use the English README for REA 2.0 local installation and protected-host rules. The npm and local target-runtime commands below are historical examples, not instructions for this fork. Current resources: [our fork](https://github.com/SamDev1303/rea2.0), [fork maintenance](https://github.com/SamDev1303/rea2.0), [upstream attribution](https://github.com/morluto/rea), [MIT licence](LICENSE), and [![fork CI](https://img.shields.io/github/actions/workflow/status/SamDev1303/rea2.0/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/SamDev1303/rea2.0/actions/workflows/ci.yml).
+
 # REA：逆向一切
 
 ### 通過一個 MCP 服務，逆向分析二進位檔案、應用程式和執行階段行為。

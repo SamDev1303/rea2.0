@@ -2,10 +2,44 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { expect } from "vitest";
+import pino from "pino";
+
+import { registerManagedCommands } from "../../src/cli/managedCommands.js";
+import { createDirectAnalysis } from "../../src/composition/directAnalysis.js";
+import { serveRegisteredCliFixture } from "../support/cli/registeredCliFixture.js";
 
 import { buildManagedPeFixture } from "../../src/dotnet/ManagedPe.fixture.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
 import { cliTest } from "../support/cli/cliFixture.js";
+
+// The registered formatter uses the maintained managed-only static producer.
+// This internal fixture is not a receipt permitting public target acquisition.
+const runAuthoredManagedCli = (path: string, arguments_: readonly string[]) => {
+  const analysis = createDirectAnalysis({});
+  return serveRegisteredCliFixture(
+    (cli) =>
+      registerManagedCommands(cli, pino({ level: "silent" }), (...input) => {
+        if (input[0] !== path || input[1] !== "inspect_managed_members")
+          throw new Error("Outside the authored managed fixture request");
+        return analysis.runProviderAnalysis(...input);
+      }),
+    arguments_,
+  );
+};
+
+const assertPublicManagedDenial = async (
+  cli: import("../support/cli/cliFixture.js").TestCli,
+  path: string,
+) => {
+  const denied = await cli.run({
+    arguments: ["inspect-managed-members", path, "--json"],
+  });
+  expect(denied.exitCode).toBe(1);
+  expect(denied.json).toMatchObject({
+    code: "capability_unavailable",
+    message: expect.stringContaining("unfamiliar native parsing are blocked"),
+  });
+};
 
 cliTest(
   "managed CLI preserves evidence, filters, envelopes, and bounded token counts",
@@ -14,7 +48,8 @@ cliTest(
     const path = join(root, "fixture.dll");
     await writeFile(path, buildManagedPeFixture());
     const argv = ["inspect-managed-members", path, "--json"];
-    const result = await cli.run({ arguments: argv });
+    await assertPublicManagedDenial(cli, path);
+    const result = await runAuthoredManagedCli(path, argv);
     expect(result.exitCode).toBe(0);
     expect(result.json).toMatchObject({
       operation: "inspect_managed_members",
@@ -24,9 +59,12 @@ cliTest(
         methods: [expect.objectContaining({ token: expect.any(String) })],
       },
     });
-    const filtered = await cli.run({
-      arguments: [...argv, "--filter-output", "operation", "--full-output"],
-    });
+    const filtered = await runAuthoredManagedCli(path, [
+      ...argv,
+      "--filter-output",
+      "operation",
+      "--full-output",
+    ]);
     expect(filtered.exitCode).toBe(0);
     expect(filtered.json).toMatchObject({
       ok: true,
@@ -36,26 +74,30 @@ cliTest(
         duration: expect.stringMatching(/^\d+ms$/u),
       },
     });
-    const count = await cli.run({
-      arguments: [...argv, "--filter-output", "operation", "--token-count"],
-    });
+    const count = await runAuthoredManagedCli(path, [
+      ...argv,
+      "--filter-output",
+      "operation",
+      "--token-count",
+    ]);
     expect(count.exitCode).toBe(0);
     expect(count.stdout).toMatch(/^\d+\n$/u);
-    const omittedCount = await cli.run({
-      arguments: [...argv, "--filter-output", "toString", "--token-count"],
-    });
+    const omittedCount = await runAuthoredManagedCli(path, [
+      ...argv,
+      "--filter-output",
+      "toString",
+      "--token-count",
+    ]);
     expect(omittedCount.exitCode).toBe(0);
     expect(omittedCount.stdout).toBe("0\n");
-    const jsonl = await cli.run({
-      arguments: [
-        "inspect-managed-members",
-        path,
-        "--format",
-        "jsonl",
-        "--filter-output",
-        "operation",
-      ],
-    });
+    const jsonl = await runAuthoredManagedCli(path, [
+      "inspect-managed-members",
+      path,
+      "--format",
+      "jsonl",
+      "--filter-output",
+      "operation",
+    ]);
     expect(jsonl.exitCode).toBe(0);
     expect(jsonl.json).toBe("inspect_managed_members");
   },
@@ -74,9 +116,12 @@ cliTest(
       });
       const path = join(root, `virtual-${virtualSectionSize}.dll`);
       await writeFile(path, bytes);
-      const result = await cli.run({
-        arguments: ["inspect-managed-members", path, "--json"],
-      });
+      await assertPublicManagedDenial(cli, path);
+      const result = await runAuthoredManagedCli(path, [
+        "inspect-managed-members",
+        path,
+        "--json",
+      ]);
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({
         normalized_result:
@@ -128,9 +173,12 @@ cliTest(
       bytes.writeUInt32LE(0x0a00, secondSection + 20);
       const path = join(root, `sections-${virtualSectionSize}.dll`);
       await writeFile(path, bytes);
-      const result = await cli.run({
-        arguments: ["inspect-managed-members", path, "--json"],
-      });
+      await assertPublicManagedDenial(cli, path);
+      const result = await runAuthoredManagedCli(path, [
+        "inspect-managed-members",
+        path,
+        "--json",
+      ]);
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({
         normalized_result: {

@@ -1,3 +1,11 @@
+import { registerSwiftCommands } from "./cli/swiftCommands.js";
+import { registerInvestigationWorkflowCommands } from "./cli/investigationWorkflowCommands.js";
+import {
+  registerOwnedFixtureHandlerEnvironment,
+  registerOwnedFixtureHandlerPort,
+} from "./application/investigationSafety/OwnedFixturePolicy.js";
+import type { DirectAnalysisSession } from "./application/DirectAnalysisDependencies.js";
+import { protectInvestigationCommands } from "./cli/investigationAdmission.js";
 import { snapshotEnvironment } from "./process/snapshotEnvironment.js";
 import { createDirectAnalysis } from "./composition/directAnalysis.js";
 import { registerEvmCommands } from "./cli/evmCommands.js";
@@ -7,7 +15,7 @@ import { Cli } from "incur";
 
 import { createLogger, parseLogLevel } from "./logger.js";
 import { PRODUCT_IDENTITY } from "./identity.js";
-import { npxRegistrationCommand } from "./application/ClientRegistrationIdentity.js";
+import { localRegistrationDisplayCommand } from "./application/ClientRegistrationIdentity.js";
 import { registerSetupCommands } from "./cli/setupCommands.js";
 import { registerCoreAnalysisCommands } from "./cli/coreAnalysisCommands.js";
 import { registerUtilityCommands } from "./cli/utilityCommands.js";
@@ -49,9 +57,10 @@ export const createCli = (
     Record<string, string | undefined>
   > = process.env,
   resultOutput?: CliResultOutput,
+  ownedStaticSession?: DirectAnalysisSession,
 ): CliInstance => {
   const environment = snapshotEnvironment(selectedEnvironment);
-  const analysis = createDirectAnalysis(environment);
+  const analysis = createDirectAnalysis(environment, ownedStaticSession);
   const logger = createLogger(
     "cli",
     environment.REA_LOG_LEVEL === undefined
@@ -62,12 +71,16 @@ export const createCli = (
     version: PRODUCT_IDENTITY.packageVersion,
     description: "Reverse engineer anything from your terminal or agent.",
     mcp: {
-      command: npxRegistrationCommand().join(" "),
+      command: localRegistrationDisplayCommand(),
       instructions:
         "Ask what software, artifact, protocol, or behavior the user wants to understand, then choose the available investigation capabilities that can produce evidence.",
     },
     sync: false,
+    update: false,
   });
+  registerOwnedFixtureHandlerEnvironment(cli, environment);
+  if (ownedStaticSession !== undefined)
+    registerOwnedFixtureHandlerPort(cli, ownedStaticSession);
 
   registerSetupCommands(cli, logger, environment);
   registerCoreAnalysisCommands(cli, logger, analysis.runDirectAnalysis);
@@ -96,6 +109,9 @@ export const createCli = (
   registerElectronCommands(cli, logger, environment);
   registerJavaScriptRuntimeObservationCommands(cli, logger);
   registerApplicationCommands(cli, logger);
+  registerInvestigationWorkflowCommands(cli, logger);
+  registerSwiftCommands(cli);
+  protectInvestigationCommands(cli);
   presentOmittableDefaults(cli);
   if (resultOutput !== undefined) streamCliCommandResults(cli, resultOutput);
   return cli;

@@ -1,38 +1,26 @@
 import { access } from "node:fs/promises";
-import { resolve } from "node:path";
 
 import { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
 import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
 import { ConfigurationError } from "../domain/configurationErrors.js";
-import { PRODUCT_IDENTITY } from "../identity.js";
-import { npxRegistrationCommand } from "./ClientRegistrationIdentity.js";
+import { localRegistrationCommand } from "./ClientRegistrationIdentity.js";
 import {
   SUPPORTED_NODE_VERSION_PROSE,
   supportsNodeVersion,
 } from "../domain/runtimeVersion.js";
 import { runDoctor, systemDoctorHost, type DoctorHost } from "./Doctor.js";
-import {
-  installLinuxHopper,
-  readLinuxDistribution,
-  systemLinuxHopperInstallHost,
-} from "./LinuxHopper.js";
-import { installMacHopper, systemMacHopperInstallHost } from "./MacHopper.js";
+import { readLinuxDistribution } from "./LinuxHopper.js";
 import {
   clientEvidencePaths,
   supportedClients,
   type SetupClient,
 } from "./SupportedClients.js";
-import {
-  skillDestinations,
-  canonicalSkillNeedsInstall,
-  installCanonicalSkill,
-} from "./SetupSkill.js";
+import { skillDestinations } from "./SetupSkill.js";
 import {
   clientConfigurationAligned,
   configureClientConfiguration,
   inspectClientConfiguration,
 } from "./SetupClientConfiguration.js";
-import { setupInstallFailure } from "./SetupInstallFailure.js";
 import {
   RegularFileCleanupFailure,
   retryRegularFileCleanup,
@@ -47,18 +35,9 @@ import type { DoctorScope } from "./Doctor.js";
 
 /** Resolve the executable and arguments used in a managed MCP registration. */
 export const setupRegistrationCommand = (
-  platform: NodeJS.Platform,
-  useNpmRunner: boolean,
-): readonly string[] =>
-  useNpmRunner
-    ? npxRegistrationCommand(platform)
-    : platform === "win32"
-      ? [
-          process.execPath,
-          resolve(process.argv[1] ?? PRODUCT_IDENTITY.cliBinary),
-          "mcp",
-        ]
-      : [resolve(process.argv[1] ?? PRODUCT_IDENTITY.cliBinary), "mcp"];
+  _platform: NodeJS.Platform,
+  _useNpmRunner: boolean,
+): readonly string[] => localRegistrationCommand();
 
 export const filterClientsNeedingConfigure = async (
   host: SetupHost,
@@ -93,7 +72,7 @@ export const hostRemediation = async (
   return "Automated Hopper setup supports Ubuntu 24.04+, Fedora 41+, Nobara 44+, 64-bit Arch Linux, CachyOS, and Omarchy; configure an existing supported provider instead.";
 };
 
-/** Production setup effects for Hopper, agent configuration, and the canonical skill directory. */
+/** Production setup effects for additive client configuration; engine and skill installs are disabled. */
 export const systemSetupHost = (
   selectedDoctorHost: DoctorHost | undefined = undefined,
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
@@ -101,12 +80,10 @@ export const systemSetupHost = (
   const doctorHost = selectedDoctorHost ?? systemDoctorHost({ environment });
   const platform = doctorHost.platform;
   const { homeDirectory } = doctorHost;
-  const macHopperHost =
-    platform === "darwin"
-      ? systemMacHopperInstallHost(homeDirectory, environment)
-      : undefined;
   const resources = new ArtifactResourceScope();
   return {
+    engineInstallationDisabled: true,
+    skillManagedExternally: true,
     platform,
     homeDirectory,
     skillDestinations: (clientIds) =>
@@ -118,7 +95,7 @@ export const systemSetupHost = (
     nodeVersion: process.versions.node,
     macosVersion: () => doctorHost.macosVersion(),
     linuxDistribution: readLinuxDistribution,
-    close: () => closeSetupResources(resources, macHopperHost),
+    close: () => closeSetupResources(resources),
     initialSetupState: async (
       scope?: DoctorScope,
     ): Promise<SetupInitialState> => {
@@ -138,48 +115,20 @@ export const systemSetupHost = (
         doctor: diagnosis,
       };
     },
-    installHopper: async (replaceExisting) => {
-      if (platform === "linux") {
-        const result = await installLinuxHopper(
-          systemLinuxHopperInstallHost(environment),
-        );
-        return result.status === "installed"
-          ? result
-          : setupInstallFailure(result.reason);
-      }
-      if (macHopperHost === undefined)
-        return setupInstallFailure("unsupported_host");
-      const result = await installMacHopper({ replaceExisting }, macHopperHost);
-      if (result.status === "installed")
-        return {
-          status: "installed",
-          launcherPath: result.launcherPath,
-          ...(result.cleanupFailure === undefined
-            ? {}
-            : { cleanupFailure: result.cleanupFailure }),
-        };
-      const failure = setupInstallFailure(result.reason);
-      if (result.cleanupFailure === undefined) return failure;
-      return failure.status === "failed"
-        ? {
-            ...failure,
-            remediation: `${failure.remediation} ${result.cleanupFailure}`,
-          }
-        : failure;
-    },
+    installHopper: () =>
+      Promise.resolve({
+        status: "failed" as const,
+        code: "unsupported_host" as const,
+        remediation:
+          "REA 2.0 does not install analysis engines. Review and install trusted tooling separately; investigation targets must never be installed on these Macs.",
+      }),
     detectedClients: () => detectClients(homeDirectory, platform, environment),
     supportedClients: () =>
       Promise.resolve(supportedClients(homeDirectory, platform, environment)),
     ...clientConfigurationOperations(resources),
-    skillNeedsInstall: (clientIds) =>
-      canonicalSkillNeedsInstall(
-        homeDirectory,
-        clientIds,
-        environment,
-        platform,
-      ),
-    installSkill: (clientIds) =>
-      installCanonicalSkill(homeDirectory, clientIds, environment, platform),
+    // The shared skill registry owns /rea2. Setup never overwrites its mirrors.
+    skillNeedsInstall: () => Promise.resolve(false),
+    installSkill: () => Promise.resolve("failed" as const),
     doctor: (scope) => runDoctor(undefined, doctorHost, scope),
   };
 };
@@ -221,22 +170,13 @@ const clientConfigurationOperations = (resources: ArtifactResourceScope) => ({
 
 const closeSetupResources = async (
   resources: ArtifactResourceScope,
-  macHopperHost: ReturnType<typeof systemMacHopperInstallHost> | undefined,
 ): Promise<string | undefined> => {
-  const [resourceCleanup, hopperCleanup] = await Promise.allSettled([
-    resources.close(),
-    Promise.resolve().then(() => macHopperHost?.close()),
-  ]);
-  const failures: string[] = [];
-  if (hopperCleanup.status === "rejected")
-    failures.push(
-      `Hopper host cleanup failed: ${errorMessage(hopperCleanup.reason)}`,
-    );
-  else if (hopperCleanup.value !== undefined)
-    failures.push(hopperCleanup.value);
-  if (resourceCleanup.status === "rejected")
-    failures.push(errorMessage(resourceCleanup.reason));
-  return failures.length === 0 ? undefined : failures.join("; ");
+  try {
+    await resources.close();
+    return undefined;
+  } catch (cause: unknown) {
+    return errorMessage(cause);
+  }
 };
 
 const runClientConfigurationOperation = async <Value>(

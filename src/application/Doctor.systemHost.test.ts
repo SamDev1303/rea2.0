@@ -23,7 +23,8 @@ it("threads the selected host and environment into system diagnostics", async ()
     environment,
     execFileOutput: async (command, arguments_, options) => {
       calls.push({ command, arguments: arguments_, environment: options?.env });
-      if (command === "sw_vers") return { stdout: "15.0\n", stderr: "" };
+      if (command === "/usr/bin/sw_vers")
+        return { stdout: "15.0\n", stderr: "" };
       if (command === "ldd") return { stdout: "linux-vdso.so.1", stderr: "" };
       return { stdout: "/selected/bin/rea\n", stderr: "" };
     },
@@ -33,13 +34,18 @@ it("threads the selected host and environment into system diagnostics", async ()
   expect(host.platform).toBe("linux");
   expect(host.architecture).toBe("x64");
   await host.installationPaths?.();
-  await host.macosVersion();
-  await host.executable(process.execPath);
+  expect(await host.macosVersion()).toBe("15.0");
+  expect(await host.executable(process.execPath)).toBe(true);
 
   expect(calls.map(({ command }) => command)).toEqual([
-    "which",
-    "sw_vers",
+    "/usr/bin/which",
+    "/usr/bin/sw_vers",
     "ldd",
+  ]);
+  expect(calls.map(({ arguments: arguments_ }) => arguments_)).toEqual([
+    ["-a", "rea2"],
+    ["-productVersion"],
+    [process.execPath],
   ]);
   expect(
     calls.every(({ environment: observed }) => observed === environment),

@@ -1,4 +1,11 @@
-import { copyFile, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join } from "node:path";
 import writeFileAtomic from "write-file-atomic";
@@ -19,8 +26,8 @@ export const MANAGED_SKILL_FILES = [
 ] as const;
 
 export const isManagedSkillManifest = (content: string): boolean =>
-  content.startsWith(`---\nname: ${PRODUCT_IDENTITY.skillName}\n`) ||
-  content.startsWith(`---\r\nname: ${PRODUCT_IDENTITY.skillName}\r\n`);
+  content.startsWith(`---\nname: ${PRODUCT_IDENTITY.bundledSkillName}\n`) ||
+  content.startsWith(`---\r\nname: ${PRODUCT_IDENTITY.bundledSkillName}\r\n`);
 
 export const readSkillFile = (path: string): Promise<string> =>
   readRegularFileText(path, { symlinks: "reject" });
@@ -39,6 +46,7 @@ export interface SkillDestination {
 
 /** Metadata and byte alignment observed in selected skill installations. */
 export interface InstalledSkillIdentity {
+  readonly source?: "shared-registry";
   readonly version: string | null;
   readonly toolCount: number | null;
   readonly canonical: boolean;
@@ -54,7 +62,7 @@ export const skillDestinations = (
   clientSkillDirectories(home, clientIds, environment, platform).map(
     ({ client, directory }) => ({
       client,
-      path: join(directory, PRODUCT_IDENTITY.skillName),
+      path: join(directory, PRODUCT_IDENTITY.bundledSkillName),
     }),
   );
 
@@ -112,7 +120,7 @@ const canonicalSkillFiles = async (
             destination,
             content: await readFile(
               new URL(
-                `../../skills/${PRODUCT_IDENTITY.skillName}/${relativePath}`,
+                `../../skills/${PRODUCT_IDENTITY.bundledSkillName}/${relativePath}`,
                 import.meta.url,
               ),
               "utf8",
@@ -243,4 +251,55 @@ export const readInstalledSkillIdentity = async (
     version: /^\s{2}version:\s*"([^"]+)"\s*$/mu.exec(content)?.[1] ?? null,
     toolCount: toolCount === undefined ? null : Number.parseInt(toolCount, 10),
   };
+};
+
+/** Discover the registry-owned skill and verify selected client mirrors without writes. */
+export const readSharedSkillIdentity = async (
+  home: string,
+  clientIds: readonly string[],
+  environment: Readonly<NodeJS.ProcessEnv> = {},
+  platform: NodeJS.Platform = process.platform,
+): Promise<InstalledSkillIdentity | undefined> => {
+  const root = join(home, "Sync", "skills", PRODUCT_IDENTITY.skillName);
+  let canonicalRoot: string;
+  let content: string;
+  try {
+    canonicalRoot = await realpath(root);
+    content = await readRegularFileText(join(canonicalRoot, "SKILL.md"), {
+      symlinks: "reject",
+      maxBytes: 65_536,
+    });
+  } catch {
+    return undefined;
+  }
+  const manifest = content.replaceAll("\r\n", "\n");
+  if (
+    manifest.length > 65_536 ||
+    !manifest.startsWith(`---\nname: ${PRODUCT_IDENTITY.skillName}\n`)
+  )
+    return {
+      source: "shared-registry",
+      canonical: false,
+      version: null,
+      toolCount: null,
+    };
+  const version = /^ {2}version: "([^"\r\n]+)"$/mu.exec(manifest)?.[1] ?? null;
+  let canonical = true;
+  for (const { directory } of clientSkillDirectories(
+    home,
+    clientIds,
+    environment,
+    platform,
+  )) {
+    try {
+      if (
+        (await realpath(join(directory, PRODUCT_IDENTITY.skillName))) !==
+        canonicalRoot
+      )
+        canonical = false;
+    } catch {
+      canonical = false;
+    }
+  }
+  return { source: "shared-registry", canonical, version, toolCount: null };
 };

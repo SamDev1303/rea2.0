@@ -11,7 +11,7 @@ import { systemSetupHost } from "./application/SetupHost.js";
 import { systemUninstallHost } from "./application/Uninstall.js";
 import { runUpdateCommand } from "./application/UpdateRuntime.js";
 import { createSystemDoctorHost } from "./doctorRuntime.js";
-import { PRODUCT_IDENTITY } from "./identity.js";
+import { localRegistrationCommand } from "./application/ClientRegistrationIdentity.js";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -34,7 +34,7 @@ it("plans setup and uninstall against selected home and client overrides", async
         ...options(false),
         dryRun: true,
         clientIds: ["codex"],
-        installSkill: true,
+        installSkill: false,
       },
       host,
     );
@@ -45,19 +45,13 @@ it("plans setup and uninstall against selected home and client overrides", async
           id: "configure_client:codex",
           target: join(environment.CODEX_HOME, "config.toml"),
         }),
-        expect.objectContaining({
-          id: "install_skill",
-          target: join(
-            environment.HOME,
-            ".agents/skills",
-            PRODUCT_IDENTITY.skillName,
-          ),
-        }),
       ]),
     );
-    expect(host.registrationCommand).toContain(
-      PRODUCT_IDENTITY.registrationPackageSpecifier,
-    );
+    expect(host.registrationCommand).toEqual(localRegistrationCommand());
+    expect(
+      result.plannedActions.some(({ kind }) => kind === "install_skill"),
+    ).toBe(false);
+    expect(await host.installSkill([])).toBe("failed");
     const clients = await systemUninstallHost(
       environment.HOME,
       undefined,
@@ -81,7 +75,15 @@ it("composes provider diagnostics from selected configuration rather than ambien
   });
   const inspections = await host.providerInspections?.();
   expect(inspections?.find(({ id }) => id === "ghidra")?.configured).toBe(true);
-  expect(JSON.stringify(inspections)).toContain("/selected/ghidra");
+  expect(inspections?.find(({ id }) => id === "ghidra")).toMatchObject({
+    available: false,
+    checks: [
+      {
+        code: "capability_unavailable",
+        detail: expect.stringContaining("no runtime probe ran"),
+      },
+    ],
+  });
   expect(JSON.stringify(inspections)).toContain("/selected/ida.json");
   expect(JSON.stringify(inspections)).not.toContain("/ambient/");
 });
@@ -97,4 +99,21 @@ it("passes only selected environment to updater subprocesses and drops npm invoc
     { REA_UPDATE_MARKER: "selected", npm_command: "exec" },
   );
   expect(result).toEqual({ ok: true, value: '{"marker":"selected"}' });
+});
+
+it("reports unavailable engine and skill installation without applying changes", async () => {
+  const doctor = createDoctorHostFixture();
+  const host = systemSetupHost(doctor, {});
+  const configure = vi.spyOn(host, "configureClient");
+  const hopper = vi.spyOn(host, "installHopper");
+  const skill = vi.spyOn(host, "installSkill");
+  for (const requested of [{ installHopper: true }, { installSkill: true }]) {
+    const result = await runSetup({ ...options(true), ...requested }, host);
+    expect(result.status).toBe("needs_human");
+    expect(result.appliedActions).toEqual([]);
+    expect(result.remediation).toMatch(/unavailable|shared skill registry/);
+  }
+  expect(configure).not.toHaveBeenCalled();
+  expect(hopper).not.toHaveBeenCalled();
+  expect(skill).not.toHaveBeenCalled();
 });

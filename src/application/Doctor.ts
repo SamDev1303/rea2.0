@@ -3,9 +3,7 @@ import { access, readdir, stat } from "node:fs/promises";
 import { homeDirectoryFromEnvironment } from "../config/homeDirectory.js";
 import { join } from "node:path";
 
-import { analysisErrorRemediationAction } from "../domain/analysisErrorPresentation.js";
-import { BinaryTargetError } from "../domain/configurationErrors.js";
-import { parseBinaryTarget } from "./BinaryTargetResolver.js";
+import { admitInvestigationPath } from "./investigationSafety/InvestigationAdmission.js";
 import { execFileOutput } from "../process/ExecFileOutput.js";
 import type { JsonValue } from "../domain/jsonValue.js";
 import { installedCaskAppdir, probeHomebrew } from "./homebrew.js";
@@ -16,7 +14,7 @@ import {
   type LinuxDistribution,
 } from "./LinuxHopper.js";
 import {
-  readInstalledSkillIdentity,
+  readSharedSkillIdentity,
   type InstalledSkillIdentity,
 } from "./SetupSkill.js";
 import { CATALOG_IDENTITY } from "../catalogIdentity.js";
@@ -77,6 +75,7 @@ export interface DoctorProviderInspection {
 }
 /** Read-only host capabilities required by diagnostics. */
 export interface DoctorHost {
+  readonly expectedSkillVersion?: string;
   readonly platform: NodeJS.Platform;
   readonly architecture: NodeJS.Architecture;
   readonly nodeVersion: string;
@@ -222,7 +221,8 @@ const collectDoctorIdentity = async (
     ],
     value: {
       cli_package_version: PRODUCT_IDENTITY.packageVersion,
-      expected_skill_version: PRODUCT_IDENTITY.skillVersion,
+      expected_skill_version:
+        host.expectedSkillVersion ?? PRODUCT_IDENTITY.skillVersion,
       sdk: SDK_IDENTITY,
       catalog: CATALOG_IDENTITY,
       live_server: {
@@ -245,7 +245,7 @@ const collectDoctorIdentity = async (
               : "stale",
         remediation: skillAligned
           ? null
-          : "Run rea setup to update the installed REA skill.",
+          : "Verify ~/Sync/skills/rea2 with the shared skill registry and sync its client mirrors; rea2 setup never overwrites the shared skill.",
       },
       registrations,
     },
@@ -255,9 +255,12 @@ const collectDoctorIdentity = async (
 const skillIdentityAligned = (
   identity: InstalledSkillIdentity | undefined,
 ): boolean =>
-  identity?.version === PRODUCT_IDENTITY.skillVersion &&
-  identity.toolCount === CATALOG_IDENTITY.counts.mcp_tools &&
-  identity.canonical;
+  identity?.source === "shared-registry"
+    ? identity.version === PRODUCT_IDENTITY.sharedSkillVersion &&
+      identity.canonical
+    : identity?.version === PRODUCT_IDENTITY.skillVersion &&
+      identity.toolCount === CATALOG_IDENTITY.counts.mcp_tools &&
+      identity.canonical;
 
 const skillIdentityCheck = (
   identity: InstalledSkillIdentity | undefined,
@@ -269,7 +272,8 @@ const skillIdentityCheck = (
     identity === undefined
       ? "Installed REA skill identity is missing."
       : "Installed REA skill identity is stale.",
-  remediation: "Run rea setup to update the installed REA skill.",
+  remediation:
+    "Verify ~/Sync/skills/rea2 with the shared skill registry and sync its client mirrors; rea2 setup never overwrites the shared skill.",
 });
 
 const registrationCheck = (
@@ -306,10 +310,12 @@ export const systemDoctorHost = (
   const platform = options.platform ?? process.platform;
   const architecture = options.architecture ?? process.arch;
   const environment = options.environment ?? process.env;
-  const hostExecFileOutput = options.execFileOutput ?? execFileOutput;
+  const hostExecFileOutput =
+    options.execFileOutput ?? protectedDoctorExecFileOutput;
   const homeDirectory = homeDirectoryFromEnvironment(environment, platform);
   const commandEnvironment = { env: environment };
   return {
+    expectedSkillVersion: PRODUCT_IDENTITY.sharedSkillVersion,
     platform,
     architecture,
     nodeVersion: process.versions.node,
@@ -323,46 +329,16 @@ export const systemDoctorHost = (
     macosVersion: () =>
       readMacosVersion(hostExecFileOutput, commandEnvironment),
     linuxDistribution: readLinuxDistribution,
-    async validTarget(path) {
-      return (
-        await parseBinaryTarget(path, {
-          cwd: process.cwd(),
-          hostArchitecture: architecture,
-        })
-      ).ok;
-    },
-    async inspectTarget(path) {
-      const result = await parseBinaryTarget(path, {
-        cwd: process.cwd(),
-        hostArchitecture: architecture,
-      });
-      if (result.ok)
-        return {
-          name: "target",
-          ok: true,
-          classification: "healthy",
-          detail: path,
-        };
-      const error = result.error;
-      const targetError =
-        error instanceof BinaryTargetError ? error : undefined;
-      return {
-        name: "target",
-        ok: false,
-        classification:
-          targetError?.constraint === "directory_requires_file"
-            ? "unsupported_target"
-            : "config_drift",
-        detail: path,
-        details: {
-          reason: targetError?.reason ?? error.message,
-          ...(targetError?.constraint === undefined
-            ? {}
-            : { constraint: targetError.constraint }),
-        },
-        remediation: analysisErrorRemediationAction(error),
-      };
-    },
+    validTarget: async () => false,
+    inspectTarget: async (path) => ({
+      name: "target",
+      ok: false,
+      code: "capability_unavailable",
+      classification: "unsupported_target",
+      detail: path,
+      remediation:
+        "Unfamiliar native target parsing requires a verified disposable analysis environment; no target bytes were acquired.",
+    }),
     executable: (path) =>
       executableAvailable(
         path,
@@ -372,7 +348,10 @@ export const systemDoctorHost = (
       ),
     linuxDemoRuntimeCheck:
       options.linuxDemoRuntimeCheck ?? uncomposedLinuxDemoRuntimeCheck,
-    supportedLinuxHopper: linuxHopperBinarySupported,
+    supportedLinuxHopper: async (path) => {
+      await admitInvestigationPath("doctor", path);
+      return linuxHopperBinarySupported(path);
+    },
     async brewHopperPath() {
       return probeHomebrew(async (command) => {
         let caskroom: string;
@@ -407,6 +386,7 @@ export const systemDoctorHost = (
       : { providerInspections: options.providerInspections }),
     async ilspyCmdVersion(path) {
       try {
+        await admitInvestigationPath("doctor", path);
         await access(path, constants.X_OK);
         return firstIlspyVersionLine(
           (
@@ -424,8 +404,11 @@ export const systemDoctorHost = (
     },
     async installationPaths() {
       try {
-        const command = platform === "win32" ? "where" : "which";
-        const arguments_ = platform === "win32" ? ["rea"] : ["-a", "rea"];
+        const command = platform === "win32" ? "where" : "/usr/bin/which";
+        const arguments_ =
+          platform === "win32"
+            ? [PRODUCT_IDENTITY.cliBinary]
+            : ["-a", PRODUCT_IDENTITY.cliBinary];
         return uniqueLines(
           (await hostExecFileOutput(command, arguments_, commandEnvironment))
             .stdout,
@@ -437,12 +420,7 @@ export const systemDoctorHost = (
       }
     },
     installedSkillIdentity: (clientIds) =>
-      readInstalledSkillIdentity(
-        homeDirectory,
-        clientIds,
-        environment,
-        platform,
-      ),
+      readSharedSkillIdentity(homeDirectory, clientIds, environment, platform),
     clientRegistrations: () =>
       readClientRegistrationStatuses(homeDirectory, undefined, {
         platform,
@@ -456,7 +434,9 @@ const readMacosVersion = async (
   options: { readonly env: NodeJS.ProcessEnv },
 ): Promise<string | undefined> => {
   try {
-    return (await run("sw_vers", ["-productVersion"], options)).stdout.trim();
+    return (
+      await run("/usr/bin/sw_vers", ["-productVersion"], options)
+    ).stdout.trim();
   } catch (cause: unknown) {
     // best-effort cleanup: optional OS version probing; failure means unknown.
     void cause;
@@ -471,6 +451,7 @@ const executableAvailable = async (
   options: { readonly env: NodeJS.ProcessEnv },
 ): Promise<boolean> => {
   try {
+    await admitInvestigationPath("doctor", path);
     await access(path, constants.X_OK);
     if (!(await stat(path)).isFile()) return false;
     if (platform !== "linux") return true;
@@ -519,3 +500,25 @@ const uniqueLines = (value: string): string[] => [
 
 const firstIlspyVersionLine = (value: string): string | undefined =>
   uniqueLines(value).find((line) => line.startsWith("ilspycmd:"));
+
+/** Diagnostic probes cannot turn configured executable paths into execution authority. */
+const protectedDoctorExecFileOutput: typeof execFileOutput = async (
+  command,
+  args,
+  options,
+) => {
+  const safeMacProbe =
+    process.platform === "darwin" &&
+    ((command === "/usr/bin/sw_vers" &&
+      args.length === 1 &&
+      args[0] === "-productVersion") ||
+      (command === "/usr/bin/which" &&
+        args.length === 2 &&
+        args[0] === "-a" &&
+        args[1] === PRODUCT_IDENTITY.cliBinary));
+  if (!safeMacProbe)
+    throw new Error(
+      "Unaudited executable probing is unavailable on protected hosts.",
+    );
+  return execFileOutput(command, args, options);
+};

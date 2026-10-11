@@ -1,3 +1,7 @@
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -71,8 +75,17 @@ afterEach(async () => {
   );
 });
 
-const connect = async (analysis: AnalysisOperationPort) => {
+const connect = async (
+  analysis: AnalysisOperationPort,
+  requests: readonly OwnedMcpFixtureRequest[] = [],
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  try {
+    await attachNonexecutingMcpFixture(server, analysis, requests);
+  } catch (cause) {
+    await server.close();
+    throw cause;
+  }
   const client = new Client({ name: "contract-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -131,9 +144,13 @@ describe("official tool input contracts", () => {
 
 describe("official Hopper proxy tools", () => {
   it("returns stable safe MCP error content", async () => {
-    const client = await connect({
-      execute: () => Promise.resolve(err(new HopperRemoteError(-1, "denied"))),
-    });
+    const client = await connect(
+      {
+        execute: () =>
+          Promise.resolve(err(new HopperRemoteError(-1, "denied"))),
+      },
+      [{ name: "list_documents", arguments: {} }],
+    );
     const result = await client.callTool({
       name: "list_documents",
       arguments: {},
@@ -147,17 +164,20 @@ describe("official Hopper proxy tools", () => {
 
   it("binds list_procedures without adding omitted document arguments", async () => {
     const invocations: Invocation[] = [];
-    const client = await connect({
-      execute: (name, arguments_) => {
-        invocations.push({ name, arguments_ });
-        return Promise.resolve(
-          ok([
-            { address: "0x1", value: "procedure" },
-            { address: "0x2", value: "procedure" },
-          ]),
-        );
+    const client = await connect(
+      {
+        execute: (name, arguments_) => {
+          invocations.push({ name, arguments_ });
+          return Promise.resolve(
+            ok([
+              { address: "0x1", value: "procedure" },
+              { address: "0x2", value: "procedure" },
+            ]),
+          );
+        },
       },
-    });
+      [{ name: "list_procedures", arguments: {} }],
+    );
 
     const result = await client.callTool({
       name: "list_procedures",
@@ -182,17 +202,20 @@ describe("official Hopper proxy tools", () => {
 
   it("returns every search match inline in one provider call", async () => {
     const invocations: Invocation[] = [];
-    const client = await connect({
-      execute: (name, arguments_) => {
-        invocations.push({ name, arguments_ });
-        return Promise.resolve(
-          ok([
-            { address: "0x1", value: "coffee" },
-            { address: "0x2", value: "coffee" },
-          ]),
-        );
+    const client = await connect(
+      {
+        execute: (name, arguments_) => {
+          invocations.push({ name, arguments_ });
+          return Promise.resolve(
+            ok([
+              { address: "0x1", value: "coffee" },
+              { address: "0x2", value: "coffee" },
+            ]),
+          );
+        },
       },
-    });
+      [{ name: "search_strings", arguments: { pattern: "coffee" } }],
+    );
 
     const result = await client.callTool({
       name: "search_strings",

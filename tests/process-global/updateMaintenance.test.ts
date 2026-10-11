@@ -52,21 +52,19 @@ const writeClient = async (id: string, content: string): Promise<string> => {
   return client.configPath;
 };
 
-const writeSkill = async (content: string): Promise<string> => {
-  const path = join(
-    home,
-    ".agents",
-    "skills",
-    PRODUCT_IDENTITY.skillName,
-    "SKILL.md",
-  );
+const writeSkill = async (
+  content: string,
+  name: string = PRODUCT_IDENTITY.bundledSkillName,
+): Promise<string> => {
+  const path = join(home, ".agents", "skills", name, "SKILL.md");
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, content);
   return path;
 };
 
-const staleCodex =
+const upstreamCodex =
   '[mcp_servers.rea]\ncommand = "npx"\nargs = ["-y", "rea-agents@0.1.0", "mcp"]\n';
+const staleCodex = `[mcp_servers.rea2]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(entryPoint)}, "mcp"]\nstartup_timeout_sec = 1\n`;
 const action = {
   id: "configure_client:codex",
   kind: "configure_client",
@@ -76,15 +74,19 @@ const action = {
   external: false,
   operation: "update",
   backupPath: "/test/.codex/config.toml.rea.backup",
-  commands: ["rea mcp"],
+  commands: [PRODUCT_IDENTITY.mcpCommand],
 };
 
 describe("OMP integration maintenance", () => {
   it("refreshes an OMP entry that enabledServers forces on", async () => {
-    const entry = { type: "stdio", command: entryPoint, args: ["mcp"] };
+    const entry = {
+      type: "stdio",
+      command: process.execPath,
+      args: [entryPoint, "mcp"],
+    };
     await writeClient(
       "omp",
-      JSON.stringify({ mcpServers: { rea: { ...entry, enabled: false } } }),
+      JSON.stringify({ mcpServers: { rea2: { ...entry, enabled: false } } }),
     );
     await expect(
       existingMaintenanceScope(home, entryPoint, process.env),
@@ -92,8 +94,8 @@ describe("OMP integration maintenance", () => {
     await writeClient(
       "omp",
       JSON.stringify({
-        mcpServers: { rea: { ...entry, enabled: false } },
-        enabledServers: ["rea"],
+        mcpServers: { rea2: { ...entry, enabled: false } },
+        enabledServers: ["rea2"],
       }),
     );
     await expect(
@@ -104,16 +106,16 @@ describe("OMP integration maintenance", () => {
   it("preserves Grok Build disabled_mcp_servers during maintenance planning", async () => {
     // Strict identity: a user-disabled integration must never be selected
     // for maintenance, even with a healthy owned entry underneath.
-    const registration = `[mcp_servers.rea]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(entryPoint)}, "mcp"]\nstartup_timeout_sec = 30\n`;
+    const registration = `[mcp_servers.rea2]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(entryPoint)}, "mcp"]\nstartup_timeout_sec = 30\n`;
     const configPath = await writeClient(
       "grok_build",
-      `disabled_mcp_servers = ["rea", "other"]\n${registration}`,
+      `disabled_mcp_servers = ["rea2", "other"]\n${registration}`,
     );
     await expect(
       existingMaintenanceScope(home, entryPoint, process.env),
     ).resolves.toMatchObject({ clients: [] });
     expect(await readFile(configPath, "utf8")).toContain(
-      'disabled_mcp_servers = ["rea", "other"]',
+      'disabled_mcp_servers = ["rea2", "other"]',
     );
     await writeFile(
       configPath,
@@ -126,6 +128,30 @@ describe("OMP integration maintenance", () => {
 });
 
 describe("existing REA integration maintenance", () => {
+  it("preserves upstream registrations and the canonical shared skill outside legacy maintenance", async () => {
+    const configPath = await writeClient("codex", upstreamCodex);
+    const skillPath = await writeSkill(
+      `---\nname: ${PRODUCT_IDENTITY.skillName}\nmetadata:\n  version: "1.0.0"\n---\n# REA 2.0\n`,
+      PRODUCT_IDENTITY.skillName,
+    );
+    const originalSkill = await readFile(skillPath, "utf8");
+    let invoked = false;
+    expect(
+      await planIntegrationMaintenance(
+        home,
+        entryPoint,
+        process.env,
+        async () => {
+          invoked = true;
+          return err("Unexpected adoption");
+        },
+      ),
+    ).toEqual({ status: "current", plannedActions: [] });
+    expect(invoked).toBe(false);
+    expect(await readFile(configPath, "utf8")).toBe(upstreamCodex);
+    expect(await readFile(skillPath, "utf8")).toBe(originalSkill);
+  });
+
   it("selects owned registrations while preserving unconfigured, foreign, and disabled choices", async () => {
     await writeClient("codex", staleCodex);
     await writeClient("claude_code", '{"mcpServers":{}}');
@@ -140,7 +166,13 @@ describe("existing REA integration maintenance", () => {
     await writeClient(
       "vscode",
       JSON.stringify({
-        servers: { rea: { type: "stdio", command: entryPoint, args: ["mcp"] } },
+        servers: {
+          rea2: {
+            type: "stdio",
+            command: process.execPath,
+            args: [entryPoint, "mcp"],
+          },
+        },
       }),
     );
     await expect(
@@ -170,9 +202,9 @@ describe("existing REA integration maintenance", () => {
     });
   });
 
-  it("includes an existing REA skill and leaves files untouched", async () => {
+  it("recognises only the retained historical bundle and leaves files untouched", async () => {
     const path = await writeSkill(
-      `---\nname: ${PRODUCT_IDENTITY.skillName}\nmetadata:\n  version: "1"\n---\n# REA\n`,
+      `---\nname: ${PRODUCT_IDENTITY.bundledSkillName}\nmetadata:\n  version: "1"\n---\n# REA\n`,
     );
     const original = await readFile(path, "utf8");
     await expect(
@@ -183,7 +215,12 @@ describe("existing REA integration maintenance", () => {
       skillDestinations: [
         {
           client: "shared",
-          path: join(home, ".agents", "skills", PRODUCT_IDENTITY.skillName),
+          path: join(
+            home,
+            ".agents",
+            "skills",
+            PRODUCT_IDENTITY.bundledSkillName,
+          ),
         },
       ],
     });
@@ -204,7 +241,9 @@ describe("existing REA integration maintenance", () => {
     expect(result).toEqual({ status: "current", plannedActions: [] });
     expect(invoked).toBe(false);
   });
+});
 
+describe("scoped legacy maintenance planning", () => {
   it("returns exact backup and command evidence with a scoped unapplied setup command", async () => {
     await writeClient("codex", staleCodex);
     const recorded: string[][] = [];

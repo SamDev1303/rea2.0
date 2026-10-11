@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ProcessObservationResources } from "./ProcessObservationResources.js";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, opendir, readlink } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -72,6 +73,7 @@ export const hashFile = async (
   expected: Stats,
   maxBytes: number,
   signal?: AbortSignal,
+  resources = new ProcessObservationResources(),
 ): Promise<FileHashOutcome> => {
   signal?.throwIfAborted();
   let handle: FileHandle;
@@ -92,63 +94,64 @@ export const hashFile = async (
       system_code: systemCode,
     };
   }
-  try {
-    signal?.throwIfAborted();
-    const stats = await handle.stat();
-    signal?.throwIfAborted();
-    if (!hasSameFileState(expected, stats) || stats.size > maxBytes)
-      return {
-        state: "omitted",
-        reason: "file_changed_or_short_read",
-        system_code: null,
-      };
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes));
-    let position = 0;
-    while (position < stats.size) {
+  return resources.withFile(path, handle, async () => {
+    try {
       signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(
-        buffer,
-        0,
-        Math.min(buffer.length, stats.size - position),
-        position,
-      );
-      if (bytesRead === 0)
+      const stats = await handle.stat();
+      signal?.throwIfAborted();
+      if (!hasSameFileState(expected, stats) || stats.size > maxBytes)
         return {
           state: "omitted",
           reason: "file_changed_or_short_read",
           system_code: null,
         };
-      hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-    const after = await handle.stat();
-    signal?.throwIfAborted();
-    if (!hasSameFileState(stats, after))
+      const hash = createHash("sha256");
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes));
+      let position = 0;
+      while (position < stats.size) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, stats.size - position),
+          position,
+        );
+        if (bytesRead === 0)
+          return {
+            state: "omitted",
+            reason: "file_changed_or_short_read",
+            system_code: null,
+          };
+        hash.update(buffer.subarray(0, bytesRead));
+        position += bytesRead;
+      }
+      const after = await handle.stat();
+      signal?.throwIfAborted();
+      if (!hasSameFileState(stats, after))
+        return {
+          state: "omitted",
+          reason: "file_changed_or_short_read",
+          system_code: null,
+        };
+      return { state: "hashed", sha256: hash.digest("hex") };
+    } catch (cause: unknown) {
+      signal?.throwIfAborted();
+      const systemCode = fileUnavailableSystemCode(cause);
+      if (systemCode === undefined) throw cause;
       return {
         state: "omitted",
-        reason: "file_changed_or_short_read",
-        system_code: null,
+        reason: "file_unavailable",
+        system_code: systemCode,
       };
-    return { state: "hashed", sha256: hash.digest("hex") };
-  } catch (cause: unknown) {
-    signal?.throwIfAborted();
-    const systemCode = fileUnavailableSystemCode(cause);
-    if (systemCode === undefined) throw cause;
-    return {
-      state: "omitted",
-      reason: "file_unavailable",
-      system_code: systemCode,
-    };
-  } finally {
-    await handle.close();
-  }
+    }
+  });
 };
 
 /** Capture bounded, root-aliased filesystem state without following symlinks. */
 export const snapshotRoots = async (
   scenario: ProcessScenario,
   signal?: AbortSignal,
+  resources = new ProcessObservationResources(),
 ): Promise<ProcessFilesystemSnapshot> => {
   const entries: FileState[] = [];
   const completeRoots: string[] = [];
@@ -210,7 +213,13 @@ export const snapshotRoots = async (
           system_code: null,
         };
       } else {
-        const outcome = await hashFile(path, stats, remainingBytes, signal);
+        const outcome = await hashFile(
+          path,
+          stats,
+          remainingBytes,
+          signal,
+          resources,
+        );
         if (outcome.state === "hashed") {
           sha256 = outcome.sha256;
           remainingBytes -= stats.size;
@@ -253,23 +262,28 @@ export const snapshotRoots = async (
     const remainingEntries =
       scenario.limits.files - entries.length - pendingNames;
     const directory = await opendir(path);
-    for await (const child of directory) {
-      signal?.throwIfAborted();
-      if (
-        children.length >= remainingEntries ||
-        depth >= scenario.limits.filesystem_depth
-      ) {
-        truncated = true;
-        complete = false;
-        if (children.length >= remainingEntries)
-          enumerationReasons.add("files_limit");
-        if (depth >= scenario.limits.filesystem_depth)
-          enumerationReasons.add("depth_limit");
-        break;
+    await resources.withDirectory(path, directory, async () => {
+      while (true) {
+        signal?.throwIfAborted();
+        const child = await directory.read();
+        if (child === null) break;
+        signal?.throwIfAborted();
+        if (
+          children.length >= remainingEntries ||
+          depth >= scenario.limits.filesystem_depth
+        ) {
+          truncated = true;
+          complete = false;
+          if (children.length >= remainingEntries)
+            enumerationReasons.add("files_limit");
+          if (depth >= scenario.limits.filesystem_depth)
+            enumerationReasons.add("depth_limit");
+          break;
+        }
+        children.push(child.name);
+        pendingNames += 1;
       }
-      children.push(child.name);
-      pendingNames += 1;
-    }
+    });
     const afterRead = await lstat(path);
     if (!hasSameIdentity(stats, afterRead, "directory")) {
       pendingNames -= children.length;

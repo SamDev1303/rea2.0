@@ -1,9 +1,11 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
+import { AdbDeviceAnalysisService } from "../../../src/application/adb/AdbDeviceAnalysisService.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 import type { AdbDeviceAnalysisPort } from "../../../src/application/adb/AdbDeviceAnalysisPort.js";
 import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
-import { parseEvidence } from "../../../src/domain/evidence.js";
 import { ok } from "../../../src/domain/result.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
@@ -264,7 +266,7 @@ const results: Readonly<Record<string, unknown>> = {
   },
 };
 
-it("advertises exact valid ADB schemas and records inline evidence through MCP", async () => {
+it("advertises exact valid ADB schemas and retains direct inert-provider Evidence through MCP while public execution is denied", async () => {
   const provider: AdbDeviceAnalysisPort = {
     async inspectAvailability() {
       return { status: "available", code: null, reason: null, diagnostics: {} };
@@ -274,6 +276,8 @@ it("advertises exact valid ADB schemas and records inline evidence through MCP",
       return ok(createAnalysisExecution(results[request.operation], identity));
     },
   };
+  const executed = vi.spyOn(provider, "execute");
+  const service = new AdbDeviceAnalysisService(provider);
   const session = createTestBinarySession(() => {
     throw new Error("deep provider must not start");
   });
@@ -321,19 +325,18 @@ it("advertises exact valid ADB schemas and records inline evidence through MCP",
 
   assertAdvertisedMcpContracts(operationNames, tools);
 
-  const pulled = await client.callTool({
-    name: "pull_adb_package",
-    arguments: {
-      serial: "emulator-5554",
-      package: "com.example",
-      output_directory: "/tmp/rea-pulls",
-    },
-  });
-  expect(pulled.isError).not.toBe(true);
-  const text = (pulled.content as { readonly text?: string }[])
-    .map((part) => part.text ?? "")
-    .join("");
-  const evidence = parseEvidence(JSON.parse(text));
+  const input = {
+    serial: "emulator-5554",
+    package: "com.example",
+    output_directory: "/tmp/rea-pulls",
+  };
+  await assertOwnedFixturePublicDenial(client, "pull_adb_package", input);
+  expect(executed).not.toHaveBeenCalled();
+  const evidence = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.execute("pull_adb_package", input),
+  );
   expect(evidence.provider.id).toBe("adb");
   expect(evidence.operation).toBe("pull_adb_package");
   expect(evidence.normalized_result).toMatchObject({

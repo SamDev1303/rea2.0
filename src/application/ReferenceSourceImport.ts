@@ -1,3 +1,4 @@
+import { isProtectedReferencePath } from "../filesystem/ProtectedPaths.js";
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 import {
   createHistoricalSourceGraph,
@@ -144,6 +145,14 @@ const createShouldExclude =
     ignored: PreparedReferenceSourceImport["ignored"],
   ): ((path: string, kind: ReferenceSourceEntryKind) => boolean) =>
   (path, kind) => {
+    if (isProtectedReferencePath(path)) {
+      exclusions.push({
+        path,
+        reason: "configured-secret",
+        pattern: "mandatory-protected-path-policy",
+      });
+      return true;
+    }
     const patternPath = kind === "directory" ? `${path}/` : path;
     const secretMatch = secrets.test(patternPath);
     if (secretMatch.ignored) {

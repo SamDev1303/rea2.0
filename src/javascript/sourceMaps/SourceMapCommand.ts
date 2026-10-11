@@ -138,10 +138,13 @@ class OwnedCodec implements SourceMapCleanupOwner {
     });
     this.check();
     const environment: NodeJS.ProcessEnv = {
-      ...(this.dependencies.environment ?? process.env),
+      HOME: this.#runtime.path,
+      TMPDIR: this.#runtime.path,
+      XDG_CONFIG_HOME: this.#runtime.path,
+      LANG: "C",
+      LC_ALL: "C",
       UV_THREADPOOL_SIZE: "1",
     };
-    delete environment.NODE_OPTIONS;
     const spawned = await (
       this.dependencies.launcher ?? spawnOwnedProviderProcess
     )({

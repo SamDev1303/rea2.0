@@ -6,10 +6,9 @@ import {
   hasWindowsNativeAuthority,
   windowsNativeAuthorityUnavailableReason,
 } from "../process/WindowsAuthority.js";
-import {
-  inspectGhidraInstallation,
-  type GhidraInstallationCheck,
-  type GhidraInstallationInspection,
+import type {
+  GhidraInstallationCheck,
+  GhidraInstallationInspection,
 } from "./GhidraInstallation.js";
 
 /** Project installation and runtime-authority facts into the doctor contract. */
@@ -56,24 +55,6 @@ export const projectGhidraDoctorInspection = (
     ],
   };
 };
-
-/** Inspect the process-configured BYO Ghidra installation for `rea doctor`. */
-export const inspectSystemGhidraProvider = (
-  environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<DoctorProviderInspection> =>
-  Promise.resolve(
-    projectGhidraDoctorInspection(
-      inspectGhidraInstallation({
-        environment,
-        ...(environment.GHIDRA_INSTALL_DIR === undefined
-          ? {}
-          : { installDir: environment.GHIDRA_INSTALL_DIR }),
-        ...(environment.JAVA_HOME === undefined
-          ? {}
-          : { javaHome: environment.JAVA_HOME }),
-      }),
-    ),
-  );
 
 const selectedChecks = (
   inspection: GhidraInstallationInspection,

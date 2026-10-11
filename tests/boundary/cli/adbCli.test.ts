@@ -1,4 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { lstat } from "node:fs/promises";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { registerAdbCommands } from "../../../src/cli/adbCommands.js";
+import { AdbProvider } from "../../../src/adb/AdbProvider.js";
+import { silentLogger } from "../../../src/logger.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
 
 import { serveCli as serve } from "./cliServeHarness.js";
 
@@ -39,12 +46,55 @@ it("reports a missing adb binary with recovery guidance", async () => {
     REA_ADB_PATH: "/nonexistent/adb",
   });
   expect(result.stdout).toContain("capability_unavailable");
-  expect(result.stdout).toContain("REA_ADB_PATH");
+  const missing = join(
+    await createTestTempDirectory("rea-adb-missing-"),
+    "absent-adb",
+  );
+  await expect(lstat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+  const provider = new AdbProvider({ environment: { REA_ADB_PATH: missing } });
+  try {
+    const parsed = await serveRegisteredCliFixture(
+      (cli) => {
+        registerAdbCommands(cli, silentLogger, {}, provider);
+      },
+      ["inspect-adb-client", "--json"],
+    );
+    expect(parsed.exitCode).toBe(1);
+    expect(parsed.stdout).toContain("capability_unavailable");
+    expect(parsed.stdout).toContain("REA_ADB_PATH");
+    expect(parsed.stdout).toContain(missing);
+  } finally {
+    await provider.close();
+  }
+  await expect(lstat(missing)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("validates device serials before contacting any device", async () => {
   const result = await serve(["inspect-adb-device", "bad serial", "--json"]);
-  expect(result.stdout).toContain("invalid_input");
+  expect(result.stdout).toContain("capability_unavailable");
+  const execute = vi.fn(async () => {
+    throw new Error("Device acquisition forbidden");
+  });
+  const inspectAvailability = vi.fn(async () => {
+    throw new Error("Tool acquisition forbidden");
+  });
+  const close = vi.fn(async () => {});
+  const parsed = await serveRegisteredCliFixture(
+    (cli) => {
+      registerAdbCommands(
+        cli,
+        silentLogger,
+        {},
+        { execute, inspectAvailability, close },
+      );
+    },
+    ["inspect-adb-device", "bad serial", "--json"],
+  );
+  expect(parsed.exitCode).toBe(1);
+  expect(parsed.stdout).toContain("invalid_input");
+  expect(execute).not.toHaveBeenCalled();
+  expect(inspectAvailability).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 it("requires the output directory option on pull", async () => {

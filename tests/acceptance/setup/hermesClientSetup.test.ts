@@ -1,21 +1,23 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { seedSharedSkillFixture } from "../../support/investigation/sharedSkillFixture.js";
 
 cliTest(
-  "Hermes setup, doctor and uninstall use the expanded profile and its personal skill",
+  "Hermes setup, doctor and uninstall preserve the expanded profile and shared skill",
   async ({ cli }) => {
     const home = await createTestTempDirectory("rea-hermes-cli-");
     const profile = join(home, "profile");
     const config = join(profile, "config.yaml");
     const skill = join(profile, "skills/reverse-engineer-anything/SKILL.md");
+    const shared = await seedSharedSkillFixture(home, join(profile, "skills"));
     const original =
       "# user settings\nmodel: custom\nmcp_servers:\n  other:\n    command: other-server\n";
-    await mkdir(profile);
+    await mkdir(profile, { recursive: true });
     await writeFile(config, original);
     const run = (arguments_: readonly string[]) =>
       cli.run({
@@ -40,9 +42,6 @@ cliTest(
       status: "planned",
       plannedActions: expect.arrayContaining([
         expect.objectContaining({ target: config }),
-        expect.objectContaining({
-          target: join(profile, "skills/reverse-engineer-anything"),
-        }),
       ]),
     });
     expect(await readFile(config, "utf8")).toBe(original);
@@ -60,13 +59,16 @@ cliTest(
       model: "custom",
       mcp_servers: {
         other: { command: "other-server" },
-        rea: { enabled: true },
+        rea2: {
+          enabled: true,
+          command: process.execPath,
+          args: [resolve("scripts/rea.mjs"), "mcp"],
+        },
       },
     });
     expect(await readFile(config + ".rea.backup", "utf8")).toBe(original);
-    expect(await readFile(skill, "utf8")).toContain(
-      "reverse-engineer-anything",
-    );
+    await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(shared.path, "utf8")).toBe(shared.content);
     await expect(
       access(join(home, ".agents/skills/reverse-engineer-anything/SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -94,6 +96,7 @@ cliTest(
     expect(uninstall.exitCode).toBe(0);
     expect(parse(await readFile(config, "utf8"))).toEqual(parse(original));
     await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(shared.path, "utf8")).toBe(shared.content);
   },
 );
 
@@ -118,6 +121,10 @@ for (const selection of ["default", "custom", "suffix", "explicit"] as const) {
         "# profile settings\nmodel: custom\nmcp_servers:\n  other:\n    command: other-server\n";
       const config = join(profile, "config.yaml");
       const rootConfig = join(root, "config.yaml");
+      const shared = await seedSharedSkillFixture(
+        home,
+        join(profile, "skills"),
+      );
       await writeFile(config, original);
       await writeFile(rootConfig, "model: root-model\n");
       await writeFile(join(root, "active_profile"), "\uFEFFCoDeR\r\n");
@@ -150,9 +157,6 @@ for (const selection of ["default", "custom", "suffix", "explicit"] as const) {
         status: "planned",
         plannedActions: expect.arrayContaining([
           expect.objectContaining({ target: config }),
-          expect.objectContaining({
-            target: join(profile, "skills", "reverse-engineer-anything"),
-          }),
         ]),
       });
       expect(
@@ -161,7 +165,11 @@ for (const selection of ["default", "custom", "suffix", "explicit"] as const) {
       ).toBe(0);
       expect(parse(await readFile(config, "utf8"))).toMatchObject({
         mcp_servers: {
-          rea: { enabled: true },
+          rea2: {
+            enabled: true,
+            command: process.execPath,
+            args: [resolve("scripts/rea.mjs"), "mcp"],
+          },
           other: { command: "other-server" },
         },
       });
@@ -172,9 +180,8 @@ for (const selection of ["default", "custom", "suffix", "explicit"] as const) {
         "reverse-engineer-anything",
         "SKILL.md",
       );
-      expect(await readFile(skill, "utf8")).toContain(
-        "name: reverse-engineer-anything",
-      );
+      await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(shared.path, "utf8")).toBe(shared.content);
       if (selection === "custom") {
         const doctor = await run([
           "doctor",
@@ -203,6 +210,7 @@ for (const selection of ["default", "custom", "suffix", "explicit"] as const) {
         expect((await run(["uninstall", "--json"])).exitCode).toBe(0);
         expect(parse(await readFile(config, "utf8"))).toEqual(parse(original));
         await expect(access(skill)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await readFile(shared.path, "utf8")).toBe(shared.content);
       }
       expect(await readFile(rootConfig, "utf8")).toBe("model: root-model\n");
       await expect(access(`${rootConfig}.rea.backup`)).rejects.toMatchObject({

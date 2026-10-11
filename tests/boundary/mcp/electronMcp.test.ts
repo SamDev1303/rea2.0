@@ -1,3 +1,16 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import {
+  assertOwnedFixturePublicDenial,
+  projectOwnedProducerError,
+} from "../../fixtures/ownedArtifactProducer.js";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
+import type { ArtifactResourceScope } from "../../../src/artifacts/ArtifactResourceScope.js";
+import { analyzeJavaScriptApplication as analyzeScopedJavaScript } from "../../../src/application/javascript/JavaScriptApplicationService.js";
+import {
+  listElectronTargets,
+  inspectElectronPage,
+} from "../../../src/application/javascript/ElectronObservationService.js";
+import { captureElectronScenario } from "../../../src/application/javascript/ElectronActiveObservationService.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { ok as resultOk } from "../../../src/domain/result.js";
 import { rm, symlink, writeFile } from "node:fs/promises";
@@ -16,6 +29,7 @@ import type { ElectronActiveObservationPort } from "../../../src/application/jav
 import { analyzeJavaScriptApplication } from "../../support/javascriptApplicationScope.js";
 import { CdpElectronProvider } from "../../../src/browser/CdpElectronProvider.js";
 import { createServer } from "../../../src/server/createServer.js";
+import * as electronTools from "../../../src/server/registerElectronTools.js";
 import { observed } from "../../fixtures/analysisExecution.js";
 import {
   startFakeCdpBrowser,
@@ -23,20 +37,31 @@ import {
 } from "../../fixtures/fakeCdpBrowser.js";
 import { writeElectronBoundaryFixture } from "../../fixtures/electronBoundaryApplication.js";
 import { createElectronActiveObservationFixtureResult } from "../../../src/domain/javascript/electronActiveObservation.fixture.js";
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { AsarArtifactReader } from "../../../src/artifacts/AsarArtifactReader.js";
 
 const browsers: FakeCdpBrowser[] = [];
 const resources: Array<{ close(): Promise<unknown> }> = [];
 const temporary: string[] = [];
 
-it("retains failed JavaScript inventory cleanup through server shutdown retries", async () => {
+it("retains owned ASAR inventory cleanup through actual server shutdown retries while MCP archives stay denied", async () => {
   const { archive } = await createStrippedAsarAddon();
   const session = createTestBinarySession(() => ({
     execute: () => Promise.resolve(observed(null)),
     close: () => Promise.resolve(resultOk(null)),
   }));
+  let factoryScope: ArtifactResourceScope | undefined;
+  const registerElectronTools = electronTools.registerElectronTools;
+  const registration = vi
+    .spyOn(electronTools, "registerElectronTools")
+    .mockImplementation((server, options) => {
+      factoryScope = options.artifactResources;
+      registerElectronTools(server, options);
+    });
   const server = createServer({ kind: "session", session });
+  expect(registration).toHaveBeenCalledTimes(1);
+  registration.mockRestore();
+  if (factoryScope === undefined)
+    throw new Error("The production server did not supply its artifact scope");
   const client = new Client({ name: "javascript-cleanup-owner", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -53,14 +78,20 @@ it("retains failed JavaScript inventory cleanup through server shutdown retries"
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const response = await client.callTool({
-      name: "analyze_javascript_application",
-      arguments: {
-        input_path: archive,
-        integrity_policy: "record-and-continue",
-      },
-    });
-    expect(parseMcpToolError(response)).toMatchObject({
+    const input = {
+      input_path: archive,
+      integrity_policy: "record-and-continue",
+    };
+    await assertOwnedFixturePublicDenial(
+      client,
+      "analyze_javascript_application",
+      input,
+    );
+    expect(owners.size).toBe(0);
+    const response = projectOwnedProducerError(
+      await analyzeScopedJavaScript(input, factoryScope),
+    );
+    expect(response).toMatchObject({
       error: {
         code: "cleanup_incomplete",
         details: {
@@ -92,7 +123,7 @@ afterEach(async () => {
   );
 });
 
-it("lets MCP JavaScript analysis continue only with recorded untrusted ASAR bytes", async () => {
+it("lets direct owned JavaScript analysis continue only with recorded untrusted ASAR bytes while public archives stay denied", async () => {
   const { archive, addon } = await createStrippedAsarAddon();
   const session = createTestBinarySession(() => ({
     execute: () => Promise.resolve(observed(null)),
@@ -106,11 +137,15 @@ it("lets MCP JavaScript analysis continue only with recorded untrusted ASAR byte
   await server.connect(serverTransport);
   await client.connect(clientTransport);
 
-  const rejected = await client.callTool({
-    name: "analyze_javascript_application",
-    arguments: { input_path: archive },
-  });
-  expect(parseMcpToolError(rejected)).toMatchObject({
+  await assertOwnedFixturePublicDenial(
+    client,
+    "analyze_javascript_application",
+    { input_path: archive },
+  );
+  const rejected = projectOwnedProducerError(
+    await analyzeJavaScriptApplication({ input_path: archive }),
+  );
+  expect(rejected).toMatchObject({
     error: {
       code: "artifact_integrity_mismatch",
       remediation: {
@@ -119,15 +154,21 @@ it("lets MCP JavaScript analysis continue only with recorded untrusted ASAR byte
     },
   });
 
-  const continued = await client.callTool({
-    name: "analyze_javascript_application",
-    arguments: {
-      input_path: archive,
-      integrity_policy: "record-and-continue",
-    },
-  });
-  expect(continued.isError).not.toBe(true);
-  expect(continued.structuredContent).toMatchObject({
+  const continuedInput = {
+    input_path: archive,
+    integrity_policy: "record-and-continue",
+  };
+  await assertOwnedFixturePublicDenial(
+    client,
+    "analyze_javascript_application",
+    continuedInput,
+  );
+  const continued = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await analyzeJavaScriptApplication(continuedInput),
+  );
+  expect(continued).toMatchObject({
     parameters: { integrity_policy: "record-and-continue" },
     normalized_result: {
       integrity_contradictions: [
@@ -138,19 +179,10 @@ it("lets MCP JavaScript analysis continue only with recorded untrusted ASAR byte
   });
 });
 
-it("exposes endpoint-scoped Electron discovery and inspection as Evidence", async () => {
+it("retains direct owned-loopback Electron discovery and inspection Evidence while public observation is denied", async () => {
   const root = await createTestTempDirectory("rea-electron-mcp-");
   temporary.push(root);
-  await writeFile(join(root, "index.html"), "<script src='app.js'></script>");
-  await writeFile(
-    join(root, "app.js"),
-    "export const observed = 'source-secret';",
-  );
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({ name: "runtime-fixture", renderer: "index.html" }),
-  );
-  await writeFile(join(root, "worker.js"), "self.onmessage = () => {};\n");
+  await writeOwnedElectronRuntimeFixture(root);
   const browser = await startFakeCdpBrowser({
     electronFileUrl: pathToFileURL(join(root, "index.html")).href,
     commandEvents: ({ method }) =>
@@ -173,13 +205,13 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
     execute: () => Promise.resolve(observed(null)),
     close: () => Promise.resolve(resultOk(null)),
   }));
+  const provider = new CdpElectronProvider();
   const server = createServer(
     { kind: "session", session },
     {
-      electronObservation: new CdpElectronProvider(),
+      electronObservation: provider,
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 1,
       }),
     },
   );
@@ -190,27 +222,50 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
   await server.connect(serverTransport);
   await client.connect(clientTransport);
 
-  const listed = await client.callTool({
-    name: "list_electron_targets",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-    },
-  });
-  expect(listed.isError).not.toBe(true);
-  expect(listed.structuredContent).toMatchObject({
+  const listedInput = {
+    cdp_endpoint: browser.endpoint,
+  };
+  const listedPriorCommands = browser.commands.length;
+  await assertOwnedFixturePublicDenial(
+    client,
+    "list_electron_targets",
+    listedInput,
+  );
+  expect(browser.commands).toHaveLength(listedPriorCommands);
+  const listed = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await listElectronTargets(
+      provider,
+      toolContract("list_electron_targets").inputSchema.parse(listedInput),
+    ),
+  );
+  expect(listed).toMatchObject({
     normalized_result: {
       targets: [{ target_id: "electron-page" }],
     },
   });
-  const inspected = await client.callTool({
-    name: "inspect_electron_page",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-      target_id: "electron-page",
-      observation_ms: 0,
-      include_script_sources: true,
-    },
-  });
+  const inspectedInput = {
+    cdp_endpoint: browser.endpoint,
+    target_id: "electron-page",
+    observation_ms: 0,
+    include_script_sources: true,
+  };
+  const inspectedPriorCommands = browser.commands.length;
+  await assertOwnedFixturePublicDenial(
+    client,
+    "inspect_electron_page",
+    inspectedInput,
+  );
+  expect(browser.commands).toHaveLength(inspectedPriorCommands);
+  const inspected = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await inspectElectronPage(
+      provider,
+      toolContract("inspect_electron_page").inputSchema.parse(inspectedInput),
+    ),
+  );
   const analyzed = await client.callTool({
     name: "analyze_javascript_application",
     arguments: { input_path: root },
@@ -235,7 +290,7 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
           analysis: evidenceFor(analyzed.structuredContent),
         },
       ],
-      runtime_observations: [evidenceFor(inspected.structuredContent)],
+      runtime_observations: [evidenceFor(inspected)],
     },
   });
   expect(reconciled.isError).not.toBe(true);
@@ -245,8 +300,7 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
       source_map_authority: { used_for_primary_matching: false },
     },
   });
-  expect(inspected.isError).not.toBe(true);
-  expect(inspected.structuredContent).toMatchObject({
+  expect(inspected).toMatchObject({
     normalized_result: {
       target: { file_path: expect.stringMatching(/\/index\.html$/u) },
       scripts: {
@@ -271,7 +325,7 @@ it("exposes endpoint-scoped Electron discovery and inspection as Evidence", asyn
   });
 }, 20_000);
 
-it("runs active Electron scenarios with selected paths and inferred working directory", async () => {
+it("runs direct recording-provider Electron scenarios with selected paths and inferred working directory while public execution stays denied", async () => {
   const root = await createTestTempDirectory("rea-electron-active-mcp-");
   temporary.push(root);
   const applicationPath = join(root, "main.js");
@@ -307,7 +361,6 @@ it("runs active Electron scenarios with selected paths and inferred working dire
       electronActiveObservation: provider,
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 0,
       }),
     },
   );
@@ -318,20 +371,31 @@ it("runs active Electron scenarios with selected paths and inferred working dire
   await server.connect(serverTransport);
   await client.connect(clientTransport);
 
-  const captured = await client.callTool({
-    name: "capture_electron_scenario",
-    arguments: {
-      executable_path: process.execPath,
-      application_path: join(aliasedRoot, "main.js"),
-      application_root: workingDirectory,
-      args: ["--token", "super-secret"],
-      actions: [
-        { step_id: "submit", kind: "click", selector: "#submit-secret" },
-      ],
-    },
-  });
-  expect(captured.isError, JSON.stringify(captured)).not.toBe(true);
-  expect(captured.structuredContent).toMatchObject({
+  const capturedInput = {
+    executable_path: process.execPath,
+    application_path: join(aliasedRoot, "main.js"),
+    application_root: workingDirectory,
+    args: ["--token", "super-secret"],
+    actions: [{ step_id: "submit", kind: "click", selector: "#submit-secret" }],
+  };
+  const capturedPriorCount = capturedInputs.length;
+  await assertOwnedFixturePublicDenial(
+    client,
+    "capture_electron_scenario",
+    capturedInput,
+  );
+  expect(capturedInputs).toHaveLength(capturedPriorCount);
+  const captured = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await captureElectronScenario(
+      provider,
+      toolContract("capture_electron_scenario").inputSchema.parse(
+        capturedInput,
+      ),
+    ),
+  );
+  expect(captured).toMatchObject({
     normalized_result: {
       application: { process_ownership: "provider-owned" },
       ipc: { events: [{ channel: "readiness:echo" }] },
@@ -346,22 +410,36 @@ it("runs active Electron scenarios with selected paths and inferred working dire
     application_path: applicationPath,
     application_root: workingDirectory,
   });
-  const inferredRoot = await client.callTool({
-    name: "capture_electron_scenario",
-    arguments: {
-      executable_path: process.execPath,
-      application_path: applicationPath,
-      actions: [],
-    },
-  });
-  expect(inferredRoot.isError, JSON.stringify(inferredRoot)).not.toBe(true);
+  const inferredRootInput = {
+    executable_path: process.execPath,
+    application_path: applicationPath,
+    actions: [],
+  };
+  const inferredRootPriorCount = capturedInputs.length;
+  await assertOwnedFixturePublicDenial(
+    client,
+    "capture_electron_scenario",
+    inferredRootInput,
+  );
+  expect(capturedInputs).toHaveLength(inferredRootPriorCount);
+  const inferredRoot = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await captureElectronScenario(
+      provider,
+      toolContract("capture_electron_scenario").inputSchema.parse(
+        inferredRootInput,
+      ),
+    ),
+  );
+  expect(inferredRoot.operation).toBe("capture_electron_scenario");
   expect(capturedInputs[1]).toMatchObject({
     application_path: applicationPath,
     application_root: root,
   });
-  expect(JSON.stringify(captured.structuredContent)).toContain("submit-secret");
-  expect(JSON.stringify(captured.structuredContent)).toContain("super-secret");
-  expect(captured.structuredContent).toMatchObject({
+  expect(JSON.stringify(captured)).toContain("submit-secret");
+  expect(JSON.stringify(captured)).toContain("super-secret");
+  expect(captured).toMatchObject({
     predicate_type: "rea.electron-active-scenario",
     operation: "capture_electron_scenario",
     parameters: {
@@ -391,7 +469,6 @@ it("exposes the target-free static JavaScript application workflow", async () =>
     {
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 1,
       }),
     },
   );
@@ -462,4 +539,19 @@ it("exposes the target-free static JavaScript application workflow", async () =>
 
 const evidenceFor = (value: unknown) => {
   return parseEvidence(value);
+};
+
+const writeOwnedElectronRuntimeFixture = async (
+  root: string,
+): Promise<void> => {
+  await writeFile(join(root, "index.html"), "<script src='app.js'></script>");
+  await writeFile(
+    join(root, "app.js"),
+    "export const observed = 'source-secret';",
+  );
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ name: "runtime-fixture", renderer: "index.html" }),
+  );
+  await writeFile(join(root, "worker.js"), "self.onmessage = () => {};\n");
 };

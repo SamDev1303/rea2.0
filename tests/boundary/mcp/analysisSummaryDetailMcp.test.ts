@@ -45,7 +45,7 @@ const connect = async (
     InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  return client;
+  return { client, session };
 };
 
 const application = async () => {
@@ -68,7 +68,7 @@ const textBytes = (content: unknown): number => {
 };
 
 it("returns the summary of complete Evidence retained for later views", async () => {
-  const client = await connect(true);
+  const { client } = await connect(true);
   const input = await application();
   const complete = await client.callTool({
     name: contract.name,
@@ -119,7 +119,7 @@ it("returns the summary of complete Evidence retained for later views", async ()
 });
 
 it("refuses summary detail when the server cannot retain the complete Evidence", async () => {
-  const client = await connect(false);
+  const { client } = await connect(false);
   const failure = parseMcpToolError(
     await client.callTool({
       name: contract.name,
@@ -132,19 +132,41 @@ it("refuses summary detail when the server cannot retain the complete Evidence",
   });
 });
 
-it("returns the summary of retained binary layout Evidence", async () => {
+it("returns an MCP summary of retained synthetic layout producer Evidence while public layout detail is denied", async () => {
   const layout = analysisViewLayoutFixture();
-  const client = await connect(
-    true,
-    new BinaryLayoutService({
-      identity: BINARY_LAYOUT_TEST_PROVIDER,
-      inspect: () => Promise.resolve(ok(layout)),
-    }),
-  );
+  const service = new BinaryLayoutService({
+    identity: BINARY_LAYOUT_TEST_PROVIDER,
+    inspect: () => Promise.resolve(ok(layout)),
+  });
+  const { client, session } = await connect(true, service);
   const layoutContract = toolContract("inspect_binary_layout");
-  const summary = await client.callTool({
+  const denied = await client.callTool({
     name: layoutContract.name,
     arguments: { path: layout.artifact.path, detail: "summary" },
+  });
+  expect(denied.isError).toBe(true);
+  expect(parseMcpToolError(denied)).toMatchObject({
+    error: {
+      code: "capability_unavailable",
+      details: {
+        operation: "inspect_binary_layout",
+        provider_id: "rea2-protected-host",
+      },
+    },
+  });
+  const produced = await service.inspect({ path: layout.artifact.path });
+  expect(produced.ok).toBe(true);
+  if (!produced.ok) throw produced.error;
+  expect(session.recordEvidence(produced.value).ok).toBe(true);
+  const summary = await client.callTool({
+    name: "inspect_analysis_view",
+    arguments: {
+      source: {
+        kind: "retained-evidence",
+        evidence_id: produced.value.evidence_id,
+      },
+      view: { kind: "summary" },
+    },
   });
   expect(summary.isError).not.toBe(true);
   const evidence = layoutContract.outputSchema.parse(summary.structuredContent);

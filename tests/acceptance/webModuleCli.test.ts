@@ -2,6 +2,9 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, onTestFinished } from "vitest";
+import pino from "pino";
+import { registerWebModuleCommands } from "../../src/cli/webModuleCommands.js";
+import { serveRegisteredCliFixture } from "../support/cli/registeredCliFixture.js";
 import { createWebModuleTraceService } from "../../src/composition/webModules.js";
 import { createServer } from "../../src/server/createServer.js";
 import { createTestBinarySession } from "../fixtures/binarySession.js";
@@ -30,11 +33,22 @@ cliTest(
       REA_LOG_LEVEL: "silent",
       REA_BROWSER_EXECUTABLE: "relative-missing-browser",
     };
-    const cliResponse = await cli.run({
+    const deniedCli = await cli.run({
       arguments: ["trace-web-module-imports", manifestPath, "0", "--json"],
       environment,
       timeoutMs: 15000,
     });
+    expect(deniedCli.exitCode).toBe(1);
+    expect(deniedCli.json).toMatchObject({ code: "capability_unavailable" });
+    const cliResponse = await serveRegisteredCliFixture(
+      (registered) =>
+        registerWebModuleCommands(
+          registered,
+          pino({ level: "silent" }),
+          environment,
+        ),
+      ["trace-web-module-imports", manifestPath, "0", "--json"],
+    );
     expect(cliResponse.exitCode).toBe(0);
     expect(cliResponse.json).toMatchObject({
       normalized_result: {
@@ -68,8 +82,23 @@ cliTest(
       name: "trace_web_module_imports",
       arguments: { manifest_path: manifestPath, script_index: 0 },
     });
-    expect(response.isError).not.toBe(true);
-    const expected = cliResponse.json;
-    expect(response.structuredContent).toEqual(expected);
+    expect(response.isError).toBe(true);
+    expect(session.activeTarget()).toBeUndefined();
+    const direct = await createWebModuleTraceService(environment).trace({
+      manifest_path: manifestPath,
+      script_index: 0,
+    });
+    expect(direct.ok).toBe(true);
+    if (!direct.ok) throw direct.error;
+    expect(direct.value).toEqual(cliResponse.json);
+    expect(session.recordEvidence(direct.value)).toMatchObject({ ok: true });
+    const retained = await client.callTool({
+      name: "get_evidence_bundle",
+      arguments: {},
+    });
+    expect(retained.isError).not.toBe(true);
+    expect(retained.structuredContent).toMatchObject({
+      result: { records: expect.arrayContaining([direct.value]) },
+    });
   },
 );

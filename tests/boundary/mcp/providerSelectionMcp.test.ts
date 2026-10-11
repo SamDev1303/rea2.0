@@ -1,3 +1,5 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -47,10 +49,14 @@ describe("provider selection over MCP", () => {
       { kind: "session", session },
       { logger: silentLogger },
     );
+    // Only the authored inert provider observation receives transport authority.
+    await attachNonexecutingMcpFixture(server, session, [
+      { name: "address_name", arguments: {} },
+    ]);
     const mcp = new Client({ name: "provider-selection", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
-    resources.push(mcp, server);
+    resources.push(mcp, server, session);
     await server.connect(serverTransport);
     await mcp.connect(clientTransport);
 
@@ -86,12 +92,18 @@ describe("provider selection over MCP", () => {
     expect(malformed.isError).toBe(true);
     expect(starts).toEqual([]);
 
-    const ambiguous = await mcp.callTool({
+    const publicOpen = await mcp.callTool({
       name: "open_binary",
       arguments: { path: target },
     });
-    expect(ambiguous.isError).toBe(true);
-    expect(structured(ambiguous)).toMatchObject({
+    expect(parseMcpToolError(publicOpen)).toMatchObject({
+      error: { code: "capability_unavailable" },
+    });
+    // Direct owned setup preserves registry selection and lazy-start assertions.
+    const ambiguous = await session.open(target);
+    expect(ambiguous.ok).toBe(false);
+    if (ambiguous.ok) throw new Error("Ambiguous provider was selected");
+    expect({ error: projectAnalysisError(ambiguous.error) }).toMatchObject({
       error: {
         code: "capability_unavailable",
         details: {
@@ -103,11 +115,8 @@ describe("provider selection over MCP", () => {
     });
     expect(starts).toEqual([]);
 
-    const opened = await mcp.callTool({
-      name: "open_binary",
-      arguments: { path: target, provider_id: "beta" },
-    });
-    expect(opened.isError).not.toBe(true);
+    const opened = await session.open(target, { providerId: "beta" });
+    expect(opened.ok).toBe(true);
     expect(starts).toEqual([]);
 
     const observed = await mcp.callTool({
@@ -145,12 +154,10 @@ describe("provider selection over MCP", () => {
       ],
     });
 
-    const unknown = await mcp.callTool({
-      name: "open_binary",
-      arguments: { path: target, provider_id: "missing" },
-    });
-    expect(unknown.isError).toBe(true);
-    expect(structured(unknown)).toMatchObject({
+    const unknown = await session.open(target, { providerId: "missing" });
+    expect(unknown.ok).toBe(false);
+    if (unknown.ok) throw new Error("Unknown provider was selected");
+    expect({ error: projectAnalysisError(unknown.error) }).toMatchObject({
       error: { details: { selection_reason: "unknown_provider" } },
     });
     expect(

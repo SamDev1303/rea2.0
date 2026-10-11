@@ -1,3 +1,5 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
+import { registerOwnedFixtureHandlerPort } from "../../../src/application/investigationSafety/OwnedFixturePolicy.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import {
@@ -49,19 +51,22 @@ const callPseudoCode = async (
     recordEvidence,
     delivery,
   );
+  const analysis = {
+    execute: () =>
+      Promise.resolve(
+        ok(createAnalysisExecution(payload, provider, { rawResult })),
+      ),
+  };
+  registerOwnedFixtureHandlerPort(server, analysis);
+  await attachNonexecutingMcpFixture(server, analysis, [
+    { name: "procedure_pseudo_code", arguments: { procedure: "main" } },
+  ]);
   registerOfficialTools(server, {
     logger: silentLogger,
     activeTarget: undefined,
     recordEvidence,
     withAdmittedAnalysis: async (_operationName, _signal, operation) =>
-      ok(
-        await operation({
-          execute: () =>
-            Promise.resolve(
-              ok(createAnalysisExecution(payload, provider, { rawResult })),
-            ),
-        }),
-      ),
+      ok(await operation(analysis)),
   });
   const client = new Client({ name: "complete-evidence-client", version: "1" });
   const [clientTransport, serverTransport] =

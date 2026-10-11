@@ -1,3 +1,4 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,7 +14,7 @@ import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { NativeFixtureRunner } from "../../fixtures/nativeCommands.js";
 
-it("rejects changed signature targets through MCP and accepts reopening the new version", async () => {
+it("rejects changed owned signature targets through MCP and accepts direct controller reopening", async () => {
   const path = join(
     await createTestTempDirectory("rea-signature-binding-mcp-"),
     "program",
@@ -23,15 +24,27 @@ it("rejects changed signature targets through MCP and accepts reopening the new 
     new NativeMacOSProvider({}, new NativeFixtureRunner(), "darwin"),
   );
   const server = createServer({ kind: "session", session });
+  await attachNonexecutingMcpFixture(server, session, [
+    { name: "inspect_signature", arguments: {} },
+  ]);
   const client = new Client({ name: "signature-binding-test", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const open = () =>
-      client.callTool({ name: "open_binary", arguments: { path } });
-    expect((await open()).isError).not.toBe(true);
+    const denied = await client.callTool({
+      name: "open_binary",
+      arguments: { path },
+    });
+    expect(denied.isError).toBe(true);
+    expect(parseMcpToolError(denied)).toMatchObject({
+      error: { code: "capability_unavailable" },
+    });
+    expect(session.activeTarget()).toBeUndefined();
+    // This fixture is produced above; controller setup opens it directly, without a transport grant.
+    const open = () => session.open(path);
+    expect((await open()).ok).toBe(true);
     await writeFile(
       path,
       machoImage({ commands: [rpathCommand("new-version")] }),
@@ -44,7 +57,7 @@ it("rejects changed signature targets through MCP and accepts reopening the new 
     expect(parseMcpToolError(changed)).toMatchObject({
       error: { code: "artifact_changed", details: { path } },
     });
-    expect((await open()).isError).not.toBe(true);
+    expect((await open()).ok).toBe(true);
     const inspected = await client.callTool({
       name: "inspect_signature",
       arguments: {},

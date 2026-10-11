@@ -1,8 +1,15 @@
-import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { expect } from "vitest";
 import { parse } from "jsonc-parser";
-import { PRODUCT_IDENTITY } from "../../../src/identity.js";
+import { localRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
 
@@ -70,11 +77,15 @@ for (const testCase of cases.filter(
       if (testCase.client === "omp")
         environment.PI_CODING_AGENT_DIR = "profile";
       const config = join(home, testCase.config);
-      const skillDirectory = join(
-        home,
-        testCase.skill,
-        "reverse-engineer-anything",
+      const skillDirectory = join(home, testCase.skill, "rea2");
+      const canonicalSkill = join(home, "Sync/skills/rea2");
+      await mkdir(canonicalSkill, { recursive: true });
+      await mkdir(dirname(skillDirectory), { recursive: true });
+      await writeFile(
+        join(canonicalSkill, "SKILL.md"),
+        '---\nname: rea2\nmetadata:\n  version: "1.0.0"\n---\nRegistry-owned fixture.\n',
       );
+      await symlink(canonicalSkill, skillDirectory, "dir");
       const run = (arguments_: readonly string[]) =>
         cli.run({
           arguments: arguments_,
@@ -94,7 +105,6 @@ for (const testCase of cases.filter(
         status: "planned",
         plannedActions: expect.arrayContaining([
           expect.objectContaining({ target: config }),
-          expect.objectContaining({ target: skillDirectory }),
         ]),
       });
       await expect(access(config)).rejects.toMatchObject({ code: "ENOENT" });
@@ -110,7 +120,7 @@ for (const testCase of cases.filter(
       await expect(access(config)).resolves.toBeUndefined();
       expect(
         await readFile(join(skillDirectory, "SKILL.md"), "utf8"),
-      ).toContain("reverse-engineer-anything");
+      ).toContain("rea2");
       await expect(access(join(home, "config.toml"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -131,8 +141,8 @@ for (const testCase of cases.filter(
         await writeFile(
           config,
           original.replace(
-            "[mcp_servers.rea]",
-            "[mcp_servers.rea]\ndisabled = true",
+            "[mcp_servers.rea2]",
+            "[mcp_servers.rea2]\ndisabled = true",
           ),
         );
         expect(
@@ -154,14 +164,15 @@ for (const testCase of cases.filter(
       const uninstall = await run(["uninstall", "--json"]);
       expect(uninstall.exitCode).toBe(0);
       expect(uninstall.json).toMatchObject({ status: "complete" });
+      // Removing a local client registration preserves the canonical shared skill.
       await expect(
         access(join(skillDirectory, "SKILL.md")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      ).resolves.toBeUndefined();
     },
   );
 }
 
-for (const policy of [{ excluded: ["rea"] }, { allowed: ["other"] }]) {
+for (const policy of [{ excluded: ["rea2"] }, { allowed: ["other"] }]) {
   cliTest(
     `Gemini refuses a registration blocked by ${Object.keys(policy)[0]}`,
     async ({ cli }) => {
@@ -170,9 +181,9 @@ for (const policy of [{ excluded: ["rea"] }, { allowed: ["other"] }]) {
       const original = JSON.stringify({
         mcp: policy,
         mcpServers: {
-          rea: {
-            command: "npx",
-            args: ["-y", PRODUCT_IDENTITY.registrationPackageSpecifier, "mcp"],
+          rea2: {
+            command: localRegistrationCommand()[0],
+            args: localRegistrationCommand().slice(1),
           },
         },
       });
@@ -231,21 +242,16 @@ cliTest(
     const higher = join(directory, "opencode.jsonc");
     const originalLower = JSON.stringify({
       mcp: {
-        rea: {
+        rea2: {
           type: "local",
-          command: [
-            "npx",
-            "-y",
-            PRODUCT_IDENTITY.registrationPackageSpecifier,
-            "mcp",
-          ],
+          command: localRegistrationCommand(),
           enabled: true,
         },
         other: { type: "local", command: ["other"] },
       },
     });
     const originalHigher =
-      '// keep this comment\n{"mcp":{"rea":{"enabled":false}},"theme":"system"}\n';
+      '// keep this comment\n{"mcp":{"rea2":{"enabled":false}},"theme":"system"}\n';
     await writeFile(lower, originalLower);
     await writeFile(higher, originalHigher);
     const run = (arguments_: readonly string[]) =>
@@ -335,7 +341,7 @@ cliTest(
     const home = await createTestTempDirectory("rea-gemini-managed-");
     const policy = join(home, "managed.json");
     const original = JSON.stringify({
-      mcp: { excluded: ["rea"] },
+      mcp: { excluded: ["rea2"] },
       unrelated: true,
     });
     await writeFile(policy, original);
@@ -377,12 +383,12 @@ cliTest(
     await mkdir(dirname(user), { recursive: true });
     await writeFile(
       system,
-      JSON.stringify({ mcp: { allowed: ["rea", "other"] } }),
+      JSON.stringify({ mcp: { allowed: ["rea2", "other"] } }),
     );
     await writeFile(defaults, JSON.stringify({ mcp: { allowed: ["other"] } }));
     await writeFile(
       user,
-      JSON.stringify({ mcp: { allowed: ["rea", "other"] } }),
+      JSON.stringify({ mcp: { allowed: ["rea2", "other"] } }),
     );
     const environment = {
       HOME: home,
@@ -402,12 +408,12 @@ cliTest(
       status: "needs_human",
       appliedActions: [],
     });
-    await writeFile(defaults, JSON.stringify({ mcp: { allowed: ["rea"] } }));
+    await writeFile(defaults, JSON.stringify({ mcp: { allowed: ["rea2"] } }));
     const allowed = await run();
     expect(allowed.exitCode).toBe(0);
     expect(allowed.json).toMatchObject({ status: "ready" });
     expect(JSON.parse(await readFile(defaults, "utf8"))).toEqual({
-      mcp: { allowed: ["rea"] },
+      mcp: { allowed: ["rea2"] },
     });
     // The consumer treats an empty consolidated allowlist as unrestricted.
     await writeFile(defaults, JSON.stringify({ mcp: { allowed: [] } }));
@@ -428,14 +434,9 @@ cliTest(
       global,
       JSON.stringify({
         mcp: {
-          rea: {
+          rea2: {
             type: "local",
-            command: [
-              "npx",
-              "-y",
-              PRODUCT_IDENTITY.registrationPackageSpecifier,
-              "mcp",
-            ],
+            command: localRegistrationCommand(),
             enabled: true,
           },
         },
@@ -489,16 +490,11 @@ cliTest(
     await mkdir(dirname(custom), { recursive: true });
     const owned = {
       type: "local",
-      command: [
-        "npx",
-        "-y",
-        PRODUCT_IDENTITY.registrationPackageSpecifier,
-        "mcp",
-      ],
+      command: localRegistrationCommand(),
       enabled: true,
     };
     const original = JSON.stringify({
-      mcp: { rea: owned, other: { type: "local", command: ["other"] } },
+      mcp: { rea2: owned, other: { type: "local", command: ["other"] } },
     });
     await writeFile(global, original);
     await writeFile(custom, "{}");
@@ -564,14 +560,14 @@ cliTest(
       defaults,
       JSON.stringify({
         mcpServers: {
-          rea: { command: "managed-default", env: { EXTRA: "default" } },
+          rea2: { command: "managed-default", env: { EXTRA: "default" } },
         },
       }),
     );
     expect((await run(command)).exitCode).toBe(0);
     const original = await readFile(user, "utf8");
     const managed = JSON.stringify({
-      mcpServers: { rea: { command: "managed-override", args: [] } },
+      mcpServers: { rea2: { command: "managed-override", args: [] } },
       unrelated: true,
     });
     await writeFile(system, managed);
@@ -634,7 +630,7 @@ cliTest(
       cli.run({ arguments: args, cwd: project, environment });
     const command = ["setup", "--client", "gemini_cli", "--yes", "--json"];
     const original = JSON.stringify({
-      mcp: { excluded: ["rea"] },
+      mcp: { excluded: ["rea2"] },
       unrelated: true,
     });
     await writeFile(workspace, original);
@@ -711,7 +707,7 @@ cliTest(
       cli.run({ arguments: args, cwd: project, environment });
     const command = ["setup", "--client", "gemini_cli", "--yes", "--json"];
     const original = JSON.stringify({
-      mcpServers: { rea: { command: "project-server", args: [] } },
+      mcpServers: { rea2: { command: "project-server", args: [] } },
     });
     await writeFile(workspace, original);
     expect((await run(command)).json).toMatchObject({
@@ -753,7 +749,7 @@ cliTest(
     const trust = join(home, ".gemini/trustedFolders.json");
     await mkdir(dirname(workspace), { recursive: true });
     await mkdir(dirname(user), { recursive: true });
-    await writeFile(workspace, JSON.stringify({ mcp: { excluded: ["rea"] } }));
+    await writeFile(workspace, JSON.stringify({ mcp: { excluded: ["rea2"] } }));
     await writeFile(trust, JSON.stringify({ [project]: "INVALID" }));
     const run = () =>
       cli.run({
@@ -782,5 +778,35 @@ cliTest(
       status: "needs_human",
       remediation: expect.stringContaining("mcp.excluded"),
     });
+  },
+);
+
+cliTest(
+  "refuses explicit bundled skill and engine installation before registration effects",
+  async ({ cli }) => {
+    const home = await createTestTempDirectory("rea2-protected-setup-");
+    for (const option of ["--skill", "--install-hopper"]) {
+      const result = await cli.run({
+        arguments: ["setup", "--client", "codex", "--yes", option, "--json"],
+        environment: { HOME: home, USERPROFILE: home },
+        cwd: home,
+        timeoutMs: 20_000,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.json).toMatchObject({
+        status: "needs_human",
+        plannedActions: [],
+        appliedActions: [],
+        remediation: expect.stringContaining(
+          option === "--skill" ? "shared skill registry" : "unavailable",
+        ),
+      });
+      await expect(
+        access(join(home, ".codex/config.toml")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(home, ".agents/skills"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
   },
 );

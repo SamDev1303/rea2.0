@@ -126,7 +126,7 @@ mcp_servers:
       display: { language: "en" },
       mcp_servers: {
         other: { command: "other-server" },
-        rea: { command: command[0], args: command.slice(1), enabled: true },
+        rea2: { command: command[0], args: command.slice(1), enabled: true },
       },
     });
 
@@ -158,7 +158,7 @@ mcp_servers:
     ).toBe("configured");
     expect(parseYaml(await readFile(client.configPath, "utf8"))).toEqual({
       mcp_servers: {
-        rea: { command: command[0], args: command.slice(1), enabled: true },
+        rea2: { command: command[0], args: command.slice(1), enabled: true },
       },
     });
   });

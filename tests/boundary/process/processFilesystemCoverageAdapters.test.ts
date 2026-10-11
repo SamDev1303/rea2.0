@@ -1,63 +1,39 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { expect, it, onTestFinished } from "vitest";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { compareProcessCaptures } from "../../../src/domain/process/processComparison.js";
 import { parseProcessCapture } from "../../../src/domain/process/processCaptureParsing.js";
 import { parseProcessScenario } from "../../../src/domain/process/processScenario.js";
 import { FINALIZED_PROCESS_CAPTURE_EXAMPLE } from "../../../src/domain/process/processCaptureExample.js";
-import { createServer } from "../../../src/server/createServer.js";
-import { createTestBinarySession } from "../../fixtures/binarySession.js";
+import {
+  prepareOwnedProcessController,
+  captureOwnedProcessCli,
+  connectOwnedProcessReadback,
+} from "../../support/process/ownedProcessController.js";
+import type { OwnedProcessSelection } from "../../support/process/ownedProcessTemplates.mjs";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import {
   CAPTURE_SKIP_REASON,
   itWithCaptureCapability,
 } from "./processCaptureCapability.js";
 
-const exec = promisify(execFile);
-
-const captureViaCli = async (scenario: Record<string, unknown>) => {
-  const scenarioPath = join(
-    await createTestTempDirectory("rea-fs-scenario-"),
-    "scenario.json",
-  );
-  await writeFile(scenarioPath, JSON.stringify(scenario));
-  const { stdout } = await exec(process.execPath, [
-    "scripts/rea.mjs",
-    "capture-process",
-    scenarioPath,
-    "--format",
-    "json",
-  ]);
-  return parseEvidence(JSON.parse(stdout));
+// Owned templates exercise maintained CLI production and actual session/MCP
+// Evidence readback. Public process dispatch has separate denial coverage.
+const captureViaCli = async (selection: OwnedProcessSelection) => {
+  const controller = await prepareOwnedProcessController(selection);
+  onTestFinished(controller.dispose);
+  return parseEvidence(await captureOwnedProcessCli(controller));
 };
 
-const captureViaMcp = async (scenario: Record<string, unknown>) => {
-  const session = createTestBinarySession(() => {
-    throw new Error("Process capture must not launch a binary provider");
-  });
-  const server = createServer({ kind: "session", session });
-  const client = new Client({ name: "filesystem-coverage", version: "1" });
-  onTestFinished(async () => {
-    await client.close();
-    await server.close();
-    await session.close();
-  });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
-  await client.connect(clientTransport);
-  const result = await client.callTool({
-    name: "capture_process_scenario",
-    arguments: scenario,
-  });
-  expect(result.isError, JSON.stringify(result)).not.toBe(true);
-  const evidence = parseEvidence(result.structuredContent);
-  await client.ping();
+const captureViaMcp = async (selection: OwnedProcessSelection) => {
+  const controller = await prepareOwnedProcessController(selection);
+  onTestFinished(controller.dispose);
+  const readback = await connectOwnedProcessReadback();
+  onTestFinished(readback.close);
+  const evidence = await readback.capture(controller);
+  await readback.client.ping();
   return evidence;
 };
 
@@ -94,10 +70,8 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
     const scenario = parseProcessScenario(JSON.parse(example));
     const root = await createTestTempDirectory("rea-full-report-adapter-");
     const evidence = await (adapter === "cli" ? captureViaCli : captureViaMcp)({
-      ...scenario,
-      executable: process.execPath,
-      working_directory: root,
-      filesystem_observation_paths: [join(root, "reports")],
+      template: "complete-report",
+      root,
     });
     const capture = parseProcessCapture(evidence.normalized_result);
     const bytes = await readFile(join(root, "reports", "final.json"));
@@ -137,16 +111,14 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
       await writeFile(join(root, "periodic.json"), periodic);
       const budget = periodic.length + final.length - shortfall;
       const evidence = await runCapture({
-        executable: process.execPath,
-        arguments: [
-          "-e",
-          "require('node:fs').writeFileSync('final.json','{\"status\":\"complete\"}')",
-        ],
-        working_directory: root,
-        filesystem_observation_paths: [root],
-        limits: { output_bytes: 1, file_bytes: budget },
+        template: "cumulative",
+        root,
+        shortfall: shortfall as 0 | 1,
       });
       const capture = parseProcessCapture(evidence.normalized_result);
+      expect(
+        capture.truncation_details.filesystem_after.hash_budget_bytes,
+      ).toBe(budget);
       expect(capture.truncation_details.filesystem_before).toMatchObject({
         hashed_bytes: periodic.length,
         hash_omissions: [],
@@ -189,22 +161,10 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
   async (adapter) => {
     const root = await createTestTempDirectory("rea-fs-coverage-adapter-");
     await writeFile(join(root, "z.txt"), "unchanged");
-    const scenario = {
-      executable: process.execPath,
-      // Delete the known file and overflow the remaining directory capacity.
-      // Incomplete enumeration still cannot prove its absence, regardless of
-      // which new entry the filesystem returns first.
-      arguments: [
-        "-e",
-        "const fs=require('node:fs');fs.unlinkSync('z.txt');fs.writeFileSync('a.txt','added');fs.writeFileSync('b.txt','added');",
-      ],
-      working_directory: root,
-      filesystem_observation_paths: [root],
-      limits: { files: 2 },
-    };
-    const evidence = await (adapter === "cli" ? captureViaCli : captureViaMcp)(
-      scenario,
-    );
+    const evidence = await (adapter === "cli" ? captureViaCli : captureViaMcp)({
+      template: "delete-create",
+      root,
+    });
     const capture = parseProcessCapture(evidence.normalized_result);
     expect(capture.truncated).toBe(true);
     await expect(readFile(join(root, "z.txt"), "utf8")).rejects.toMatchObject({
@@ -229,19 +189,10 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
     const root = await createTestTempDirectory("rea-fs-content-adapter-");
     const file = join(root, "changed.txt");
     await writeFile(file, "before");
-    const scenario = {
-      executable: process.execPath,
-      arguments: [
-        "-e",
-        "require('node:fs').writeFileSync('changed.txt','after!')",
-      ],
-      working_directory: root,
-      filesystem_observation_paths: [root],
-      limits: { file_bytes: 1 },
-    };
-    const evidence = await (adapter === "cli" ? captureViaCli : captureViaMcp)(
-      scenario,
-    );
+    const evidence = await (adapter === "cli" ? captureViaCli : captureViaMcp)({
+      template: "rewrite",
+      root,
+    });
     const capture = parseProcessCapture(evidence.normalized_result);
     expect(await readFile(file, "utf8")).toBe("after!");
     const effect = capture.filesystem_effects.find(
@@ -284,16 +235,7 @@ it.skipIf(CAPTURE_SKIP_REASON || process.platform === "win32")(
     await writeFile(join(root, "subtree", "z.txt"), "unchanged");
     await writeFile(join(target, "z.txt"), "unchanged");
     await writeFile(join(root, "removed.txt"), "removed");
-    const evidence = await captureViaMcp({
-      executable: process.execPath,
-      arguments: [
-        "-e",
-        "const fs=require('node:fs');fs.rmSync('subtree',{recursive:true});fs.symlinkSync(process.argv[1],'subtree');fs.unlinkSync('removed.txt');",
-        target,
-      ],
-      working_directory: root,
-      filesystem_observation_paths: [root],
-    });
+    const evidence = await captureViaMcp({ template: "symlink", root, target });
     const capture = parseProcessCapture(evidence.normalized_result);
     expect(await readFile(join(root, "subtree", "z.txt"), "utf8")).toBe(
       "unchanged",

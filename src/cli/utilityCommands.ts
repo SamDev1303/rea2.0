@@ -1,4 +1,5 @@
 import { z } from "incur";
+import { projectProtectedProviderStatus } from "../application/investigationSafety/ProtectedCapabilityPresentation.js";
 
 import type { DirectAnalysis } from "../composition/directAnalysis.js";
 import type { ReferenceSourcePolicy } from "../domain/referenceSourcePolicy.js";
@@ -137,7 +138,10 @@ const registerCapabilityCommands = (
         command === "capabilities"
           ? "List provider capabilities and side effects"
           : "List configured analysis providers",
-      run: () => logCliCommand(logger, command, () => runSessionStatus(logger)),
+      run: () =>
+        logCliCommand(logger, command, async () =>
+          projectProtectedProviderStatus(await runSessionStatus(logger)),
+        ),
     });
   }
 };

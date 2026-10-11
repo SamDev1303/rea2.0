@@ -12,11 +12,17 @@ import { extname, isAbsolute, resolve } from "node:path";
 import { BinaryTargetError } from "../domain/configurationErrors.js";
 import {
   openRegularFile,
+  RegularFileAdmissionFailure,
   sameRegularFileState,
 } from "../filesystem/RegularFile.js";
+import { OwnedStaticFixtureCleanupFailure } from "../filesystem/OwnedStaticResource.js";
 import { AnalysisCancelledError } from "../domain/analysisErrorCore.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import { err, ok, type Result } from "../domain/result.js";
+import {
+  assertOwnedStaticFixtureAcquisition,
+  withOwnedStaticFixtureFile,
+} from "../filesystem/OwnedStaticReadBoundary.js";
 import { readMipsElfAbiFlags } from "./MipsElfAbiFlags.js";
 import {
   resolveAppBundleExecutable,
@@ -64,6 +70,7 @@ export const parseBinaryTarget = async (
   const candidate = isAbsolute(input) ? input : resolve(cwd, input);
   try {
     throwIfTargetResolutionCancelled(signal);
+    await assertOwnedStaticFixtureAcquisition(candidate, "metadata");
     await access(candidate, constants.R_OK);
     throwIfTargetResolutionCancelled(signal);
     const canonical = await realpath(candidate);
@@ -78,20 +85,18 @@ export const parseBinaryTarget = async (
       symlinks: "reject",
       signal,
     });
-    try {
+    return await withOwnedStaticFixtureFile(handle, async () => {
       throwIfTargetResolutionCancelled(signal);
       const metadata = await handle.stat();
       throwIfTargetResolutionCancelled(signal);
       if (formatHint === "dos-com") {
         if (targetKind !== undefined && targetKind !== "executable")
-          return err(
-            new BinaryTargetError(
-              path,
-              "DOS COM format requires an executable target kind",
-            ),
+          throw new BinaryTargetError(
+            path,
+            "DOS COM format requires an executable target kind",
           );
         const length = validateDosComLength(metadata.size);
-        if (!length.ok) return err(new BinaryTargetError(path, length.error));
+        if (!length.ok) throw new BinaryTargetError(path, length.error);
         return ok({
           path,
           sourcePath: canonical,
@@ -129,7 +134,7 @@ export const parseBinaryTarget = async (
         hostArchitecture,
         signal,
       );
-      if (!detected.ok) return err(new BinaryTargetError(path, detected.error));
+      if (!detected.ok) throw new BinaryTargetError(path, detected.error);
       return ok({
         path,
         sourcePath: process.platform === "win32" ? candidate : canonical,
@@ -138,23 +143,32 @@ export const parseBinaryTarget = async (
         kind: "executable",
         ...detected.value,
       });
-    } finally {
-      await handle.close();
-    }
+    });
   } catch (cause: unknown) {
-    if (cause instanceof AnalysisCancelledError) return err(cause);
-    if (cause instanceof BinaryTargetError) return err(cause);
-    if (!(cause instanceof Error)) throw cause;
-    const code = filesystemErrorCode(cause);
-    if (code === undefined) throw cause;
-    return err(
-      new BinaryTargetError(
-        candidate,
-        targetFailureReason(code, cause.message),
-        { cause },
-      ),
-    );
+    return targetResolutionFailure(candidate, cause);
   }
+};
+
+const targetResolutionFailure = (
+  candidate: string,
+  cause: unknown,
+): Result<BinaryTarget, BinaryTargetError | AnalysisCancelledError> => {
+  if (cause instanceof RegularFileAdmissionFailure)
+    throw new OwnedStaticFixtureCleanupFailure(
+      { kind: "file", owner: cause.owner, scope: "parser" },
+      { kind: "failed", cause: cause.cause },
+      cause.cleanupCause,
+    );
+  if (cause instanceof AnalysisCancelledError) return err(cause);
+  if (cause instanceof BinaryTargetError) return err(cause);
+  if (!(cause instanceof Error)) throw cause;
+  const code = filesystemErrorCode(cause);
+  if (code === undefined) throw cause;
+  return err(
+    new BinaryTargetError(candidate, targetFailureReason(code, cause.message), {
+      cause,
+    }),
+  );
 };
 
 const filesystemErrorCode = (cause: Error): string | undefined => {
@@ -270,6 +284,7 @@ const sha256Handle = async (
       throw new BinaryTargetError(path, "target grew while being read");
   }
   throwIfTargetResolutionCancelled(signal);
+  await assertOwnedStaticFixtureAcquisition(path, "metadata");
   const [opened, currentPath] = await Promise.all([handle.stat(), lstat(path)]);
   if (
     !sameRegularFileState(initial, opened) ||
@@ -283,6 +298,7 @@ const sha256Handle = async (
 const resolveAppBundle = async (
   path: string,
 ): Promise<Result<ResolvedAppBundle, BinaryTargetError>> => {
+  await assertOwnedStaticFixtureAcquisition(path, "metadata");
   const metadata = await stat(path);
   if (!metadata.isDirectory()) return ok({ executable: path });
   if (extname(path).toLowerCase() !== ".app")

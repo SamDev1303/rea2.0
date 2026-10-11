@@ -1,3 +1,8 @@
+import {
+  createOwnedArtifactProducer,
+  requireOwnedProducerEvidence,
+  assertOwnedFixturePublicDenial,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createHash } from "node:crypto";
@@ -18,12 +23,16 @@ import type { BinarySession } from "../../../src/application/binary/BinarySessio
 import { MANAGED_NATIVE_VERIFICATION_EXAMPLE } from "../../../src/contracts/managed/managedWorkflowExamples.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { ManagedStaticProvider } from "../../../src/dotnet/ManagedStaticProvider.js";
+import { compareManagedMembersEvidenceValidated } from "../../../src/application/managed/ManagedMemberComparisonService.js";
+import { compareManagedMembersInputSchema } from "../../../src/domain/managed/managedMemberComparison.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { buildManagedPeFixture } from "../../../src/dotnet/ManagedPe.fixture.js";
 
+type OwnedProducer = ReturnType<typeof createOwnedArtifactProducer>;
+
 type ManagedOutputAssertion = Awaited<ReturnType<typeof createOutputAssertion>>;
 
-it("runs every managed static inspection independently of an active native target", async () => {
+it("runs each direct owned managed producer inspection without a native engine while MCP parsing stays denied", async () => {
   const directory = await createTestTempDirectory(
     "rea-managed-independent-mcp-",
   );
@@ -42,12 +51,17 @@ it("runs every managed static inspection independently of an active native targe
   const session = composeBinarySession(new AnalysisProviderRegistry([]), [
     new ManagedStaticProvider(),
   ]);
+  const producer = createOwnedArtifactProducer(session, [
+    path,
+    otherPath,
+    partialPath,
+    join(directory, "missing.dll"),
+  ]);
   const server = createServer(
     { kind: "session", session },
     {
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 0,
         browserObservationEnabled: false,
         electronObservationEnabled: false,
       }),
@@ -68,11 +82,12 @@ it("runs every managed static inspection independently of an active native targe
     expect(managedMembersTool?.inputSchema).toMatchObject({
       additionalProperties: false,
     });
-    const artifact = structured(
-      await client.callTool({
-        name: "inspect_managed_artifact",
-        arguments: { path },
-      }),
+    await assertOwnedFixturePublicDenial(client, "inspect_managed_artifact", {
+      path,
+    });
+    expect(session.activeTarget()).toBeUndefined();
+    const artifact = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_artifact", { path }),
     );
     expect(artifact).toMatchObject({
       operation: "inspect_managed_artifact",
@@ -89,46 +104,56 @@ it("runs every managed static inspection independently of an active native targe
       arguments: { path: join(directory, "missing.dll") },
     });
     expect(invalidSelection.isError).toBe(true);
-    const members = structured(
-      await client.callTool({ name: "inspect_managed_members", arguments: {} }),
+    expect(
+      (
+        await producer.produce("inspect_managed_artifact", {
+          path: join(directory, "missing.dll"),
+        })
+      ).ok,
+    ).toBe(false);
+    await assertOwnedFixturePublicDenial(client, "inspect_managed_members", {});
+    const members = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_members"),
     );
     expect(members).toMatchObject({
       operation: "inspect_managed_members",
       provider: { id: "rea-dotnet-static" },
       subject: { local_path: path, format: "pe" },
     });
-    const otherArtifact = structured(
-      await client.callTool({
-        name: "inspect_managed_artifact",
-        arguments: { path: otherPath },
-      }),
+    await assertOwnedFixturePublicDenial(client, "inspect_managed_artifact", {
+      path: otherPath,
+    });
+    const otherArtifact = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_artifact", { path: otherPath }),
     );
     expect(otherArtifact).toMatchObject({
       subject: { local_path: otherPath, format: "pe" },
     });
-    const reusedOtherTarget = structured(
-      await client.callTool({ name: "inspect_managed_members", arguments: {} }),
+    const reusedOtherTarget = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_members"),
     );
     expect(reusedOtherTarget).toMatchObject({
       operation: "inspect_managed_members",
       subject: { local_path: otherPath, format: "pe" },
     });
-    const boundaries = structured(
-      await client.callTool({
-        name: "inspect_managed_native_boundaries",
-        arguments: { path },
-      }),
+    await assertOwnedFixturePublicDenial(
+      client,
+      "inspect_managed_native_boundaries",
+      { path },
+    );
+    const boundaries = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_native_boundaries", { path }),
     );
     expect(boundaries).toMatchObject({
       operation: "inspect_managed_native_boundaries",
       provider: { id: "rea-dotnet-static" },
       subject: { local_path: path, format: "pe" },
     });
-    const partial = structured(
-      await client.callTool({
-        name: "inspect_managed_members",
-        arguments: { path: partialPath },
-      }),
+    await assertOwnedFixturePublicDenial(client, "inspect_managed_members", {
+      path: partialPath,
+    });
+    const partial = requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_members", { path: partialPath }),
     );
     expect(partial).toMatchObject({
       subject: { local_path: partialPath, format: "pe" },
@@ -151,7 +176,7 @@ it("runs every managed static inspection independently of an active native targe
   }
 }, 30_000);
 
-it("opens a managed PE and executes the managed static provider through MCP", async () => {
+it("produces and compares owned managed PE Evidence directly, retaining it and verifying reconstruction through MCP", async () => {
   const directory = await createTestTempDirectory("rea-managed-mcp-");
   const path = join(directory, "fixture.exe");
   const rightPath = join(directory, "fixture-renamed.exe");
@@ -160,12 +185,12 @@ it("opens a managed PE and executes the managed static provider through MCP", as
   const session = composeBinarySession(new AnalysisProviderRegistry([]), [
     new ManagedStaticProvider(),
   ]);
+  const producer = createOwnedArtifactProducer(session, [path, rightPath]);
   const server = createServer(
     { kind: "session", session },
     {
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 0,
         browserObservationEnabled: false,
         electronObservationEnabled: false,
       }),
@@ -183,12 +208,15 @@ it("opens a managed PE and executes the managed static provider through MCP", as
       client,
       path,
       assertOutput,
+      producer,
     );
     await verifyManagedComparisonAndReconstruction(
       client,
       members,
       rightPath,
       assertOutput,
+      producer,
+      session,
     );
   } finally {
     await Promise.all([client.close(), server.close()]);
@@ -255,12 +283,13 @@ const inspectManagedStaticWorkflow = async (
   client: Client,
   path: string,
   outputAssertion: ManagedOutputAssertion,
+  producer: OwnedProducer,
 ): Promise<Record<string, unknown>> => {
-  const inspected = structured(
-    await client.callTool({
-      name: "inspect_managed_artifact",
-      arguments: { path },
-    }),
+  await assertOwnedFixturePublicDenial(client, "inspect_managed_artifact", {
+    path,
+  });
+  const inspected = requireOwnedProducerEvidence(
+    await producer.produce("inspect_managed_artifact", { path }),
   );
   await outputAssertion.assert("inspect_managed_artifact", inspected);
   expect(inspected).toMatchObject({
@@ -274,12 +303,12 @@ const inspectManagedStaticWorkflow = async (
     provider: { id: "rea-dotnet-static" },
     subject: { local_path: path, format: "pe" },
   });
+  await assertOwnedFixturePublicDenial(client, "inspect_managed_members", {
+    path,
+  });
   const members = inlineEvidence(
-    structured(
-      await client.callTool({
-        name: "inspect_managed_members",
-        arguments: { path },
-      }),
+    requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_members", { path }),
     ),
   );
   await outputAssertion.assert("inspect_managed_members", members);
@@ -298,11 +327,13 @@ const inspectManagedStaticWorkflow = async (
       ],
     },
   });
-  const boundaries = structured(
-    await client.callTool({
-      name: "inspect_managed_native_boundaries",
-      arguments: { path },
-    }),
+  await assertOwnedFixturePublicDenial(
+    client,
+    "inspect_managed_native_boundaries",
+    { path },
+  );
+  const boundaries = requireOwnedProducerEvidence(
+    await producer.produce("inspect_managed_native_boundaries", { path }),
   );
   await outputAssertion.assert("inspect_managed_native_boundaries", boundaries);
   expect(boundaries).toMatchObject({
@@ -334,30 +365,35 @@ const verifyManagedComparisonAndReconstruction = async (
   members: Record<string, unknown>,
   rightPath: string,
   outputAssertion: ManagedOutputAssertion,
+  producer: OwnedProducer,
+  session: BinarySession,
 ): Promise<void> => {
-  await client.callTool({
-    name: "open_binary",
-    arguments: { path: rightPath },
+  await assertOwnedFixturePublicDenial(client, "open_binary", {
+    path: rightPath,
   });
+  expect((await producer.open(rightPath)).ok).toBe(true);
+  await assertOwnedFixturePublicDenial(client, "inspect_managed_members", {});
   const right = inlineEvidence(
-    structured(
-      await client.callTool({
-        name: "inspect_managed_members",
-        arguments: {},
-      }),
+    requireOwnedProducerEvidence(
+      await producer.produce("inspect_managed_members"),
     ),
   );
-  const compared = inlineEvidence(
-    structured(
-      await client.callTool({
-        name: "compare_managed_members",
-        arguments: {
-          left: members,
-          right,
-        },
-      }),
+  await assertOwnedFixturePublicDenial(client, "compare_managed_members", {
+    left: members,
+    right,
+  });
+  const compared = requireOwnedProducerEvidence(
+    compareManagedMembersEvidenceValidated(
+      compareManagedMembersInputSchema.parse({ left: members, right }),
     ),
   );
+  expect(session.recordEvidence(compared)).toMatchObject({ ok: true });
+  const retained = structured(
+    await client.callTool({ name: "get_evidence_bundle", arguments: {} }),
+  );
+  expect(retained).toMatchObject({
+    result: { records: expect.arrayContaining([compared]) },
+  });
   await outputAssertion.assert("compare_managed_members", compared);
   expect(compared).toMatchObject({
     operation: "compare_managed_members",

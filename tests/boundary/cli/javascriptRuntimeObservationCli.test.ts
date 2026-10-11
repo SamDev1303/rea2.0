@@ -1,10 +1,12 @@
-import { execFile } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 
 import { afterEach, describe, expect, test } from "vitest";
+import pino from "pino";
+import { registerJavaScriptRuntimeObservationCommands } from "../../../src/cliJavaScriptRuntimeCommands.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { runCliJson } from "../../fixtures/cliJsonProcess.js";
 
 import { observeJavaScriptRuntime } from "../../../src/application/javascript/JavaScriptRuntimeObservationService.js";
 import { V8InspectorProvider } from "../../../src/inspector/V8InspectorProvider.js";
@@ -12,7 +14,6 @@ import { observeJavaScriptRuntimeInputSchema } from "../../../src/domain/javascr
 import { startFakeV8Inspector } from "../../fixtures/inspector/fakeV8Inspector.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
-const execute = promisify(execFile);
 const TIMEOUT_MS = 20_000;
 
 describe("JavaScript runtime observation CLI parity", () => {
@@ -101,16 +102,24 @@ const runCli = async (
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv,
 ): Promise<unknown> => {
-  const { stdout } = await execute(
-    process.execPath,
-    ["scripts/rea.mjs", ...arguments_],
-    {
-      cwd: process.cwd(),
-      env: environment,
-      maxBuffer: 16 * 1_024 * 1_024,
-    },
-  );
-  return JSON.parse(stdout);
+  if (
+    !["list-javascript-runtime-targets", "observe-javascript-runtime"].includes(
+      arguments_[0] ?? "",
+    )
+  )
+    throw new Error("Outside the authored Inspector fixture commands");
+  const denied = await runCliJson(arguments_, { PATH: environment.PATH ?? "" });
+  expect(denied).toMatchObject({ code: "capability_unavailable" });
+  return (
+    await serveRegisteredCliFixture(
+      (registered) =>
+        registerJavaScriptRuntimeObservationCommands(
+          registered,
+          pino({ level: "silent" }),
+        ),
+      arguments_,
+    )
+  ).json;
 };
 
 const evidenceIdFrom = (value: unknown): string => {

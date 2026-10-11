@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
 import { createStrippedAsarAddon } from "../../fixtures/strippedAsarAddon.js";
+import { analyzeJavaScriptApplication } from "../../support/javascriptApplicationScope.js";
 
 const execute = promisify(execFile);
 const run = async (arguments_: readonly string[]): Promise<unknown> => {
@@ -16,16 +17,21 @@ const run = async (arguments_: readonly string[]): Promise<unknown> => {
 };
 
 it.each(["analyze-javascript-application", "analyze"])(
-  "%s carries the integrity policy into shared JavaScript analysis",
+  "%s denies public archives while the owned producer preserves integrity policy",
   async (command) => {
     const { archive, addon } = await createStrippedAsarAddon();
-    const result = await run([
-      command,
-      archive,
-      "--integrity-policy",
-      "record-and-continue",
-    ]);
-    expect(result).toMatchObject({
+    await expect(
+      run([command, archive, "--integrity-policy", "record-and-continue"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stdout: expect.stringContaining("capability_unavailable"),
+    });
+    const result = await analyzeJavaScriptApplication({
+      input_path: archive,
+      integrity_policy: "record-and-continue",
+    });
+    if (!result.ok) throw result.error;
+    expect(result.value).toMatchObject({
       operation: "analyze_javascript_application",
       parameters: { integrity_policy: "record-and-continue" },
       normalized_result: {

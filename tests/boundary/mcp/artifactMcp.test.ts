@@ -1,3 +1,9 @@
+import {
+  createOwnedArtifactProducer,
+  requireOwnedProducerEvidence,
+  projectOwnedProducerError,
+  assertOwnedFixturePublicDenial,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { ok as resultOk } from "../../../src/domain/result.js";
@@ -29,7 +35,7 @@ it.each([
   { unpacked: false, label: "embedded" },
   { unpacked: true, label: "unpacked" },
 ])(
-  "returns actionable local details for an $label ASAR integrity error",
+  "returns actionable direct producer details for an owned $label ASAR integrity error while MCP denies parsing",
   async ({ unpacked }) => {
     const root = await createTestTempDirectory("rea-asar-integrity-mcp-");
     const source = join(root, "source");
@@ -53,7 +59,8 @@ it.each([
       await writeFile(archive, bytes);
     }
 
-    const session = createTestBinarySession(new ArtifactProvider(process.env));
+    const session = createTestBinarySession(new ArtifactProvider({}));
+    const producer = createOwnedArtifactProducer(session, [archive]);
     const server = createServer({ kind: "session", session });
     const client = new Client({ name: "asar-integrity-test", version: "1" });
     const [clientTransport, serverTransport] =
@@ -61,18 +68,15 @@ it.each([
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
-      const opened = await client.callTool({
-        name: "open_binary",
-        arguments: { path: archive },
+      await assertOwnedFixturePublicDenial(client, "open_binary", {
+        path: archive,
       });
-      expect(opened.isError).not.toBe(true);
+      expect(session.activeTarget()).toBeUndefined();
+      expect((await producer.open(archive)).ok).toBe(true);
 
-      const result = await client.callTool({
-        name: "inspect_artifact",
-        arguments: {},
-      });
-      expect(result.isError).toBe(true);
-      expect(parseMcpToolError(result)).toEqual({
+      await assertOwnedFixturePublicDenial(client, "inspect_artifact", {});
+      const result = await producer.produce("inspect_artifact");
+      expect(projectOwnedProducerError(result)).toEqual({
         error: {
           code: "artifact_integrity_mismatch",
           category: "integrity_mismatch",
@@ -112,14 +116,15 @@ const artifactInventoryResultSchema = z.object({
   ),
 });
 
-it("extracts an active archive through MCP when requested", async () => {
+it("extracts a source-authored archive directly while public MCP extraction is denied", async () => {
   const root = await createTestTempDirectory("rea-artifact-extract-mcp-");
   const archive = join(root, "fixture.zip");
   const zip = new ZipWriter(new Uint8ArrayWriter());
   await zip.add("main.js", new TextReader("console.log('extract');\n"));
   await writeFile(archive, await zip.close());
 
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [archive]);
   const server = createServer({ kind: "session", session });
   const client = new Client({ name: "artifact-extract-test", version: "1" });
   const [clientTransport, serverTransport] =
@@ -128,20 +133,20 @@ it("extracts an active archive through MCP when requested", async () => {
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const opened = await client.callTool({
-      name: "open_binary",
-      arguments: { path: archive },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: archive,
     });
-    expect(opened.isError).not.toBe(true);
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await producer.open(archive)).ok).toBe(true);
 
-    const result = await client.callTool({
-      name: "extract_artifact",
-      arguments: {},
-    });
-    expect(result.isError).not.toBe(true);
+    await assertOwnedFixturePublicDenial(client, "extract_artifact", {});
+    const result = requireOwnedProducerEvidence(
+      await producer.produce("extract_artifact", {}),
+    );
+
     const normalized = z
       .object({ output_root: z.string(), artifacts: z.array(z.unknown()) })
-      .parse(toolEvidence(result.structuredContent).normalized_result);
+      .parse(toolEvidence(result).normalized_result);
     outputRoot = normalized.output_root;
     expect(await readFile(join(outputRoot, "main.js"), "utf8")).toBe(
       "console.log('extract');\n",
@@ -154,7 +159,7 @@ it("extracts an active archive through MCP when requested", async () => {
   }
 });
 
-it("extracts a macOS app bundle through MCP", async () => {
+it("extracts a source-authored macOS app bundle directly while public MCP extraction is denied", async () => {
   const root = await createTestTempDirectory("rea-artifact-extract-app-mcp-");
   const contents = join(root, "Fixture.app", "Contents");
   await mkdir(join(contents, "MacOS"), { recursive: true });
@@ -168,7 +173,10 @@ it("extracts a macOS app bundle through MCP", async () => {
   header.writeUInt32LE(2, 12);
   await writeFile(join(contents, "MacOS", "Fixture"), header);
 
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [
+    join(root, "Fixture.app"),
+  ]);
   const server = createServer({ kind: "session", session });
   const client = new Client({
     name: "artifact-extract-app-test",
@@ -180,20 +188,20 @@ it("extracts a macOS app bundle through MCP", async () => {
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const opened = await client.callTool({
-      name: "open_binary",
-      arguments: { path: join(root, "Fixture.app") },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: join(root, "Fixture.app"),
     });
-    expect(opened.isError).not.toBe(true);
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await producer.open(join(root, "Fixture.app"))).ok).toBe(true);
 
-    const result = await client.callTool({
-      name: "extract_artifact",
-      arguments: {},
-    });
-    expect(result.isError).not.toBe(true);
+    await assertOwnedFixturePublicDenial(client, "extract_artifact", {});
+    const result = requireOwnedProducerEvidence(
+      await producer.produce("extract_artifact", {}),
+    );
+
     const normalized = z
       .object({ output_root: z.string() })
-      .parse(toolEvidence(result.structuredContent).normalized_result);
+      .parse(toolEvidence(result).normalized_result);
     outputRoot = normalized.output_root;
     expect(
       await readFile(join(outputRoot, "Contents", "Info.plist"), "utf8"),
@@ -227,7 +235,8 @@ it("records an explicitly continued mismatch, preserves verified siblings, and n
   bytes.write(secondChanged, secondOffset, "utf8");
   await writeFile(archive, bytes);
 
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [archive]);
   const server = createServer({ kind: "session", session });
   const client = new Client({ name: "asar-continue-test", version: "1" });
   const [clientTransport, serverTransport] =
@@ -235,20 +244,20 @@ it("records an explicitly continued mismatch, preserves verified siblings, and n
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    await client.callTool({
-      name: "open_binary",
-      arguments: { path: archive },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: archive,
     });
-    const result = await client.callTool({
-      name: "inspect_artifact",
-      arguments: {
+    expect((await producer.open(archive)).ok).toBe(true);
+    await assertOwnedFixturePublicDenial(client, "inspect_artifact", {
+      integrity_policy: "record-and-continue",
+    });
+    const result = requireOwnedProducerEvidence(
+      await producer.produce("inspect_artifact", {
         integrity_policy: "record-and-continue",
-      },
-    });
-    expect(result.isError, JSON.stringify(result.structuredContent)).not.toBe(
-      true,
+      }),
     );
-    const compact = toolEvidence(result.structuredContent);
+
+    const compact = toolEvidence(result);
     const evidence = session.evidenceById(compact.evidence_id);
     if (evidence === undefined) throw new Error("missing inventory Evidence");
     const inspection = z
@@ -400,7 +409,7 @@ it("compares inline inventory Evidence without prior session calls", async () =>
   }
 });
 
-it("returns full artifact graphs inline and compares changed inventories", async () => {
+it("retains complete direct fixture inventories and compares them through MCP", async () => {
   const directory = await createTestTempDirectory("rea-artifact-mcp-");
   const archive = join(directory, "fixture.ipa");
   const changedArchive = join(directory, "changed.ipa");
@@ -413,7 +422,11 @@ it("returns full artifact graphs inline and compares changed inventories", async
     new TextReader("changed();"),
   );
   await writeFile(changedArchive, await changedWriter.close());
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [
+    archive,
+    changedArchive,
+  ]);
   const server = createServer({ kind: "session", session });
   const client = new Client({ name: "artifact-mcp-test", version: "1" });
   const [clientTransport, serverTransport] =
@@ -421,17 +434,17 @@ it("returns full artifact graphs inline and compares changed inventories", async
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const opened = await client.callTool({
-      name: "open_binary",
-      arguments: { path: archive },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: archive,
     });
-    expect(opened.isError).not.toBe(true);
-    const inspected = await client.callTool({
-      name: "inspect_artifact",
-      arguments: {},
-    });
-    expect(inspected.isError).not.toBe(true);
-    const inspectionResult = toolEvidence(inspected.structuredContent);
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await producer.open(archive)).ok).toBe(true);
+    await assertOwnedFixturePublicDenial(client, "inspect_artifact", {});
+    const inspected = requireOwnedProducerEvidence(
+      await producer.produce("inspect_artifact", {}),
+    );
+
+    const inspectionResult = toolEvidence(inspected);
     const inspectionEvidence = session.evidenceById(
       inspectionResult.evidence_id,
     );
@@ -458,12 +471,12 @@ it("returns full artifact graphs inline and compares changed inventories", async
     expect(inspectionEvidence.evidence_links).toEqual([
       inspection.substeps[0]?.evidence_id,
     ]);
-    const inventory = await client.callTool({
-      name: "inspect_artifact",
-      arguments: {},
-    });
-    expect(inventory.isError).not.toBe(true);
-    const inventoryResult = toolEvidence(inventory.structuredContent);
+    await assertOwnedFixturePublicDenial(client, "inspect_artifact", {});
+    const inventory = requireOwnedProducerEvidence(
+      await producer.produce("inspect_artifact", {}),
+    );
+
+    const inventoryResult = toolEvidence(inventory);
     const evidence = session.evidenceById(inventoryResult.evidence_id);
     if (evidence === undefined) throw new Error("missing inventory Evidence");
     expect(evidence).toMatchObject({
@@ -490,16 +503,15 @@ it("returns full artifact graphs inline and compares changed inventories", async
         }),
       ]),
     );
-    const openedChanged = await client.callTool({
-      name: "open_binary",
-      arguments: { path: changedArchive },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: changedArchive,
     });
-    expect(openedChanged.isError).not.toBe(true);
-    const changedInventory = await client.callTool({
-      name: "inspect_artifact",
-      arguments: {},
-    });
-    const changedResult = toolEvidence(changedInventory.structuredContent);
+    expect((await producer.open(changedArchive)).ok).toBe(true);
+    await assertOwnedFixturePublicDenial(client, "inspect_artifact", {});
+    const changedInventory = requireOwnedProducerEvidence(
+      await producer.produce("inspect_artifact", {}),
+    );
+    const changedResult = toolEvidence(changedInventory);
     const changedInspection = z
       .object({
         substeps: z.array(z.object({ evidence: z.unknown() })),

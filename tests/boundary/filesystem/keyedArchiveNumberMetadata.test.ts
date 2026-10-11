@@ -2,6 +2,8 @@ import { it } from "vitest";
 
 import { inspectBundleKeyedArchive } from "../../../src/artifacts/apple/KeyedArchiveReader.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
+import { digestOwnedFixtureInput } from "../../../src/application/investigationSafety/OwnedFixturePolicy.js";
+import { runOwnedCliFixture } from "../../support/investigation/ownedCliFixture.js";
 import {
   archiveNumberMetadataCases,
   expectKeyedArchiveNumberMetadata,
@@ -24,11 +26,32 @@ it.each(archiveNumberMetadataCases)(
 
 cliTest.for(archiveNumberMetadataCases)(
   "built CLI preserves numeric meaning for $name",
-  async (item, { cli }) => {
+  async (item, { processes }) => {
     const fixture = await keyedArchiveNumberMetadataFixture(item);
-    const output = await cli.run({
+    const output = await runOwnedCliFixture(processes, {
       arguments: ["inspect-keyed-archive", fixture.path, "--json"],
-      environment: { REA_LOG_LEVEL: "silent", REA_ANALYSIS_PROVIDER: "auto" },
+      policy: {
+        roots: [fixture.root],
+        files: [
+          { path: fixture.path, sha256: fixture.digest, role: "dependency" },
+        ],
+        static_inventory: { directories: [] },
+        endpoints: [],
+        environment: [],
+        available_capabilities: ["owned-apple-static-fixture"],
+        grants: [
+          {
+            operation: "inspect-keyed-archive",
+            input_digest: digestOwnedFixtureInput({
+              args: { path: fixture.path, archive: "." },
+              options: { offset: 0, limit: 20000 },
+            }),
+            capability: "owned-apple-static-fixture",
+            mode: "owned-static",
+            port_id: "controller-owned-apple-static-port",
+          },
+        ],
+      },
     });
     expectKeyedArchiveNumberMetadata(
       parseEvidence(output.json).normalized_result,

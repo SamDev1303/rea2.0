@@ -1,5 +1,7 @@
 import {
   lstat,
+  link,
+  mkdir,
   mkdtemp,
   open,
   rm,
@@ -9,8 +11,39 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { readStableArtifact } from "./readStableArtifact.js";
+
+it.each(["protected-name", "canonical-protected-parent", "hardlink"] as const)(
+  "rejects %s before opening or hashing selected bytes",
+  async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), "rea-stable-exclusion-"));
+    const privateRoot = join(root, "secrets");
+    await mkdir(privateRoot);
+    const privateFile = join(privateRoot, "fixture.js");
+    await writeFile(privateFile, "synthetic credential sentinel");
+    let selected = privateFile;
+    if (kind === "canonical-protected-parent") {
+      await symlink(privateRoot, join(root, "alias"));
+      selected = join(root, "alias", "fixture.js");
+    } else if (kind === "hardlink") {
+      selected = join(root, "ordinary.js");
+      await link(privateFile, selected);
+    }
+    const opened = vi.fn(open);
+    try {
+      await expect(
+        readStableArtifact(selected, 1024, undefined, {
+          lstat: (path) => lstat(path, { bigint: true }),
+          open: opened,
+        }),
+      ).rejects.toMatchObject({ reason: "path" });
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 const checkChange = async (
   stage: "before-open" | "after-read" | "symlink-replacement",

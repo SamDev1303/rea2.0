@@ -7,6 +7,8 @@ import {
   sameRegularFileState,
   RegularFileChangedError,
 } from "../filesystem/RegularFile.js";
+import { retainOwnedStaticFixtureCleanup } from "../filesystem/OwnedStaticReadBoundary.js";
+import { OwnedStaticFixtureCleanupFailure } from "../filesystem/OwnedStaticResource.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
 import { readBoundedFileBytes } from "../process/BoundedFileBytes.js";
 import type { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
@@ -16,6 +18,8 @@ import type { AnalysisCleanupObservation } from "../domain/analysisErrorBase.js"
 export interface RegularFileReadOptions {
   readonly signal?: AbortSignal | undefined;
   readonly symlinks?: "follow" | "reject";
+  readonly maxBytes?: number;
+  readonly hardlinks?: "allow" | "reject";
 }
 
 export type RegularFileReadOutcome<Value> =
@@ -24,6 +28,13 @@ export type RegularFileReadOutcome<Value> =
 
 /** A close failed after reading; this error transfers the exact handle owner. */
 export class RegularFileCleanupFailure<Value = unknown> extends Error {
+  readonly #retryCauses: unknown[] = [];
+  get cleanupAttempts(): readonly unknown[] {
+    return [this.cleanupCause, ...this.#retryCauses];
+  }
+  retainCleanupAttempt(cause: unknown): void {
+    this.#retryCauses.push(cause);
+  }
   constructor(
     readonly path: string,
     readonly owner: OwnedFileHandle,
@@ -36,6 +47,23 @@ export class RegularFileCleanupFailure<Value = unknown> extends Error {
     this.name = "RegularFileCleanupFailure";
   }
 }
+
+/** Retain scoped parser owners before a consumer can wrap or serialize the failure. */
+const regularFileCleanupFailure = <Value>(
+  path: string,
+  owner: OwnedFileHandle,
+  outcome: RegularFileReadOutcome<Value>,
+  cleanupCause: unknown,
+): RegularFileCleanupFailure<Value> | OwnedStaticFixtureCleanupFailure => {
+  const scoped = new OwnedStaticFixtureCleanupFailure(
+    { kind: "file", owner, scope: "parser" },
+    outcome,
+    cleanupCause,
+  );
+  return retainOwnedStaticFixtureCleanup(scoped)
+    ? scoped
+    : new RegularFileCleanupFailure(path, owner, outcome, cleanupCause);
+};
 
 /** Retry a failed close through its retained owner and report any remaining cleanup. */
 export const retryRegularFileCleanup = async <Value>(
@@ -51,6 +79,7 @@ export const retryRegularFileCleanup = async <Value>(
     resource: failure.path,
   });
   if (released.kind === "released") return { outcome: failure.outcome };
+  failure.retainCleanupAttempt(released.cause);
   return {
     outcome: failure.outcome,
     cleanup: {
@@ -78,7 +107,7 @@ export const withRegularFile = async <Value>(
     });
   } catch (cause: unknown) {
     if (!(cause instanceof RegularFileAdmissionFailure)) throw cause;
-    throw new RegularFileCleanupFailure(
+    throw regularFileCleanupFailure(
       path,
       cause.owner,
       { kind: "failed", cause: cause.cause },
@@ -89,6 +118,10 @@ export const withRegularFile = async <Value>(
   let outcome: RegularFileReadOutcome<Value>;
   try {
     const stats = await handle.stat();
+    if (options.hardlinks === "reject" && stats.nlink > 1)
+      throw new Error(
+        "Multi-link inputs are outside protected investigation scope",
+      );
     signal?.throwIfAborted();
     const value = await read(handle, stats);
     signal?.throwIfAborted();
@@ -108,7 +141,7 @@ export const withRegularFile = async <Value>(
   try {
     await owner.close();
   } catch (cleanupCause: unknown) {
-    throw new RegularFileCleanupFailure(path, owner, outcome, cleanupCause);
+    throw regularFileCleanupFailure(path, owner, outcome, cleanupCause);
   }
   if (outcome.kind === "failed") throw outcome.cause;
   return outcome.value;
@@ -122,6 +155,8 @@ export const readRegularFile = (
   withRegularFile(
     path,
     async (handle, stats) => {
+      if (options.maxBytes !== undefined && stats.size > options.maxBytes)
+        throw new RangeError("Regular file exceeds the declared read budget");
       const bytes = await readBoundedFileBytes(
         handle,
         stats.size,

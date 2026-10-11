@@ -1,11 +1,8 @@
 import {
   link,
   lstat,
-  mkdtemp,
-  open,
   realpath,
   rename,
-  rm,
   type FileHandle,
 } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
@@ -17,6 +14,12 @@ import {
 } from "../domain/analysisErrorCore.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { readJsonInputFile } from "./JsonInputFile.js";
+import { RegularFileCleanupFailure } from "./RegularFileRead.js";
+import { OwnedStaticFixtureCleanupFailure } from "../filesystem/OwnedStaticResource.js";
+import {
+  JsonWriteCleanupFailure,
+  withJsonWriteResources,
+} from "./JsonWriteResources.js";
 import { NonRegularFileReadError } from "../filesystem/RegularFile.js";
 
 /** Request control and its owning operation for an interruptible atomic write. */
@@ -56,6 +59,11 @@ export const readJsonFile = async (
     }
     return ok(decoded.value);
   } catch (cause: unknown) {
+    if (
+      cause instanceof RegularFileCleanupFailure ||
+      cause instanceof OwnedStaticFixtureCleanupFailure
+    )
+      throw cause;
     if (cause instanceof AnalysisResourceConstraintError) return err(cause);
     return err(
       new EvidenceFileError(
@@ -127,6 +135,7 @@ export async function writeTextParts(
     );
     return ok({ path: requestedPath, bytes });
   } catch (cause: unknown) {
+    if (cause instanceof JsonWriteCleanupFailure) return err(cause);
     if (
       cancellation?.signal.aborted === true &&
       cause instanceof AnalysisCancelledError &&
@@ -161,29 +170,20 @@ const publishFile = async (
   overwrite: boolean,
   cancellation?: TextWriteCancellation,
 ): Promise<number> => {
-  const stagingDirectory = await mkdtemp(
-    resolve(dirname(destination), ".rea-write-"),
-  );
-  try {
-    const staged = resolve(stagingDirectory, "content");
-    const file = await open(staged, "wx", 0o600);
-    let bytes = 0;
-    try {
-      bytes = await writeStagedParts(file, parts, cancellation);
-      assertWriteActive(cancellation);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
+  return withJsonWriteResources(destination, async (resources) => {
+    const file = await resources.acquire();
+    const bytes = await writeStagedParts(file, parts, cancellation);
+    assertWriteActive(cancellation);
+    await file.sync();
+    await resources.closeFile();
     // Once submitted, the atomic publication can win a later cancellation race.
     assertWriteActive(cancellation);
-    if (overwrite) await rename(staged, destination);
-    // A hard link publishes complete bytes atomically and cannot replace an existing name.
-    else await link(staged, destination);
+    resources.preparePublication(bytes);
+    if (overwrite) await rename(resources.staged, destination);
+    else await link(resources.staged, destination);
+    resources.confirmPublication();
     return bytes;
-  } finally {
-    await rm(stagingDirectory, { recursive: true, force: true });
-  }
+  });
 };
 
 const writeStagedParts = async (
@@ -205,8 +205,18 @@ const writeStagedParts = async (
       await file.writeFile(part.value, { encoding: "utf8" });
       bytes += Buffer.byteLength(part.value, "utf8");
     }
-  } finally {
-    if (!exhausted) iterator.return?.();
+  } catch (primary: unknown) {
+    if (!exhausted) {
+      try {
+        iterator.return?.();
+      } catch (cleanup: unknown) {
+        throw new AggregateError(
+          [primary, cleanup],
+          "Evidence text generation and iterator cleanup failed",
+        );
+      }
+    }
+    throw primary;
   }
 };
 

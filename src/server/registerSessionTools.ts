@@ -1,4 +1,5 @@
 import type { EvidenceMcpServer } from "./EvidenceMcpServer.js";
+import { ownedFixtureExecutionEnvironment } from "../application/investigationSafety/OwnedFixtureExecution.js";
 
 import {
   getNavigationContext,
@@ -111,7 +112,7 @@ const registerProcessTools = ({
                 input,
                 context.mcpReq.signal,
                 process.platform,
-                process.env,
+                ownedFixtureExecutionEnvironment({}),
                 undefined,
                 undefined,
                 progress,

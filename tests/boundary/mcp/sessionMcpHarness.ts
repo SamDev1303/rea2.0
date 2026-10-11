@@ -1,6 +1,9 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
+import type { BinarySession } from "../../../src/application/binary/BinarySession.js";
+import { readAnalysisSnapshot } from "../../../src/application/binary/AnalysisSnapshotFiles.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, isAbsolute, relative, join } from "node:path";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
@@ -26,6 +29,7 @@ const SNAPSHOT_PROFILE = createAnalysisProfile(
 
 export interface SessionMcpHarness {
   readonly mcp: Client;
+  readonly session: BinarySession;
   readonly first: string;
   readonly second: string;
   readonly closed: string[];
@@ -50,6 +54,17 @@ export const createSessionMcpHarness = async (
       logger: silentLogger,
     },
   );
+  await attachNonexecutingMcpFixture(server, session, [
+    { name: "current_document", arguments: {} },
+    {
+      name: "address_name",
+      arguments: { address: "0x1000", document: "fixture" },
+    },
+    {
+      name: "address_name",
+      arguments: { address: "0x1001", document: "fixture" },
+    },
+  ]);
   const mcp = new Client({ name: "session-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -58,6 +73,7 @@ export const createSessionMcpHarness = async (
   await mcp.connect(clientTransport);
   return {
     mcp,
+    session,
     first,
     second,
     closed,
@@ -162,4 +178,26 @@ const structured = (result: CallToolResult): Record<string, unknown> => {
   )
     throw new Error("missing structured result");
   return z.record(z.string(), z.unknown()).parse(result.structuredContent);
+};
+
+/** Direct trusted fixture setup; this is never a successful MCP open receipt. */
+export const openOwnedSessionTarget = async (
+  harness: SessionMcpHarness,
+  path: string,
+  snapshotPath?: string,
+) => {
+  if (path !== harness.first && path !== harness.second)
+    throw new Error("Target was not produced by this fixture controller");
+  if (snapshotPath === undefined) return harness.session.open(path);
+  const selected = relative(dirname(harness.first), snapshotPath);
+  if (
+    !isAbsolute(snapshotPath) ||
+    selected.startsWith("..") ||
+    isAbsolute(selected)
+  )
+    throw new Error("Snapshot is outside this synthetic controller scope");
+  const snapshot = await readAnalysisSnapshot(snapshotPath);
+  return snapshot.ok
+    ? harness.session.open(path, { snapshot: snapshot.value })
+    : snapshot;
 };

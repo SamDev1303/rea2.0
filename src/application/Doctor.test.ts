@@ -187,7 +187,8 @@ describe("doctor installation identity", () => {
       skill: {
         installed_version: "10",
         state: "stale",
-        remediation: "Run rea setup to update the installed REA skill.",
+        remediation:
+          "Verify ~/Sync/skills/rea2 with the shared skill registry and sync its client mirrors; rea2 setup never overwrites the shared skill.",
       },
     });
   });
@@ -200,14 +201,16 @@ describe("doctor installation identity", () => {
     expect(result.healthy).toBe(false);
     expect(result.identity?.skill).toMatchObject({
       state: "missing",
-      remediation: "Run rea setup to update the installed REA skill.",
+      remediation:
+        "Verify ~/Sync/skills/rea2 with the shared skill registry and sync its client mirrors; rea2 setup never overwrites the shared skill.",
     });
     expect(result.checks).toContainEqual({
       name: "skill:identity",
       ok: false,
       classification: "config_drift",
       detail: "Installed REA skill identity is missing.",
-      remediation: "Run rea setup to update the installed REA skill.",
+      remediation:
+        "Verify ~/Sync/skills/rea2 with the shared skill registry and sync its client mirrors; rea2 setup never overwrites the shared skill.",
     });
   });
   it("reports stale client registration paths without claiming live state", async () => {

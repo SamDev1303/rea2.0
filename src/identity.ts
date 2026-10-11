@@ -1,20 +1,24 @@
+import { localRegistrationDisplayCommand } from "./application/ClientRegistrationIdentity.js";
+
 /**
- * Canonical public identity shared by packaging, setup, MCP, and skill install.
+ * Canonical fork identity shared by local packaging, setup, MCP, and skill discovery.
  * Centralization prevents persistent client registrations from drifting from
- * the npm package or executable exposed in package.json.
+ * the local executable exposed in package.json.
  */
 export const PRODUCT_IDENTITY = {
-  displayName: "REA",
+  displayName: "REA 2.0",
   packageName: PACKAGE_METADATA.name,
-  packageSpecifier: `${PACKAGE_METADATA.name}@latest`,
-  registrationPackageSpecifier: `${PACKAGE_METADATA.name}@${PACKAGE_METADATA.version}`,
+  packageSpecifier: "rea2",
+  registrationPackageSpecifier: "rea2",
   packageVersion: PACKAGE_METADATA.version,
-  cliBinary: "rea",
-  mcpCommand: `npx -y ${PACKAGE_METADATA.name}@${PACKAGE_METADATA.version} mcp`,
-  mcpServerKey: "rea",
-  skillName: "reverse-engineer-anything",
+  cliBinary: "rea2",
+  mcpCommand: localRegistrationDisplayCommand(),
+  mcpServerKey: "rea2",
+  skillName: "rea2",
+  sharedSkillVersion: "1.0.0",
+  bundledSkillName: "reverse-engineer-anything",
   skillVersion: PACKAGE_METADATA.skillVersion,
-  configFileName: "rea.json",
+  configFileName: "rea2.json",
 } as const;
 
 /** Exact SDK package identities, distinct from negotiated protocol version. */

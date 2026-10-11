@@ -1,3 +1,4 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { ok as resultOk } from "../../../src/domain/result.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -5,6 +6,8 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 
+import { createDeferred } from "../../fixtures/binarySession.js";
+import type { OwnedMcpFixtureRequest } from "../../support/investigation/ownedMcpFixture.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import type {
   AnalysisClient,
@@ -23,8 +26,16 @@ afterEach(async () => {
   );
 });
 
-const connect = async (analysis: AnalysisOperationPort) => {
+const connect = async (
+  analysis: AnalysisOperationPort,
+  requests: readonly OwnedMcpFixtureRequest[] = [
+    { name: "list_procedures", arguments: {} },
+    { name: "procedure_pseudo_code", arguments: { procedure: "0x1000" } },
+    { name: "xrefs", arguments: {} },
+  ],
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  await attachNonexecutingMcpFixture(server, analysis, requests);
   const client = new Client({
     name: "integration-test",
     version: "1.0.0",
@@ -161,3 +172,49 @@ it("advertises the complete currently available inventory with a session", async
     expect(tool.outputSchema, tool.name).toBeDefined();
   }
 }, 10_000);
+
+it("orders admissions without waiting for an already-running recording analysis", async () => {
+  const entered = createDeferred<void>();
+  const release = createDeferred<ReturnType<typeof ok>>();
+  let firstSettled = false;
+  const client = await connect(
+    {
+      execute: (_operation, args) => {
+        if (args.address === "0x1000") {
+          entered.resolve();
+          return release.promise;
+        }
+        return Promise.resolve(ok("second completed"));
+      },
+    },
+    [
+      { name: "address_name", arguments: { address: "0x1000" } },
+      { name: "address_name", arguments: { address: "0x1001" } },
+    ],
+  );
+  const first = client
+    .callTool({ name: "address_name", arguments: { address: "0x1000" } })
+    .then((result) => {
+      firstSettled = true;
+      return result;
+    });
+  try {
+    await entered.promise;
+    const second = await client.callTool({
+      name: "address_name",
+      arguments: { address: "0x1001" },
+    });
+    expect(second.isError).not.toBe(true);
+    expect(structured(second)).toMatchObject({
+      normalized_result: "second completed",
+    });
+    expect(firstSettled).toBe(false);
+    release.resolve(ok("first completed"));
+    expect(structured(await first)).toMatchObject({
+      normalized_result: "first completed",
+    });
+  } finally {
+    release.resolve(ok("first completed"));
+    await first;
+  }
+});

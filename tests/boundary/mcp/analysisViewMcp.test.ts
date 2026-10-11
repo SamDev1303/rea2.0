@@ -157,7 +157,7 @@ it("discovers an oversized native dossier by exact metadata and reads its retain
   expect(parseMcpToolError(invalid).error.code).toBe("invalid_request");
 });
 
-it("advertises exact schemas and projects one layout section from retained Evidence", async () => {
+it("advertises exact schemas and projects one layout section from retained synthetic producer Evidence", async () => {
   const layout = analysisViewLayoutFixture();
   const service = new BinaryLayoutService({
     identity: BINARY_LAYOUT_TEST_PROVIDER,
@@ -187,9 +187,22 @@ it("advertises exact schemas and projects one layout section from retained Evide
     name: "inspect_binary_layout",
     arguments: { path: layout.artifact.path },
   });
-  expect(inspected.isError).not.toBe(true);
+  expect(inspected.isError).toBe(true);
+  expect(parseMcpToolError(inspected)).toMatchObject({
+    error: {
+      code: "capability_unavailable",
+      details: {
+        operation: "inspect_binary_layout",
+        provider_id: "rea2-protected-host",
+      },
+    },
+  });
+  const produced = await service.inspect({ path: layout.artifact.path });
+  expect(produced.ok).toBe(true);
+  if (!produced.ok) throw produced.error;
+  expect(session.recordEvidence(produced.value).ok).toBe(true);
   const parent = toolContract("inspect_binary_layout").outputSchema.parse(
-    inspected.structuredContent,
+    produced.value,
   );
   const response = await client.callTool({
     name: "inspect_analysis_view",

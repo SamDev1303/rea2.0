@@ -6,6 +6,7 @@ import { ConfigurationError } from "../domain/configurationErrors.js";
 import { SUPPORTED_NODE_VERSION_PROSE } from "../domain/runtimeVersion.js";
 import { FakeSetupHost, options } from "./Setup.fixture.js";
 import { runSetup } from "./Setup.js";
+import { localRegistrationCommand } from "./ClientRegistrationIdentity.js";
 
 describe("setup workflow", () => {
   it("rejects Node 25 before applying setup actions", async () => {
@@ -216,7 +217,10 @@ describe("setup scoped readiness", () => {
       {
         client: "codex",
         config_path: "/codex.toml",
-        command: ["rea", "mcp"],
+        command: [
+          localRegistrationCommand()[0]!,
+          ...localRegistrationCommand().slice(1),
+        ],
         state: "aligned",
         remediation: null,
       },

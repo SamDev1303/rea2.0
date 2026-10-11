@@ -20,10 +20,10 @@ for (const profile of ["", "bogus"])
       const config = join(agent, "mcp.json");
       const original = JSON.stringify({
         mcpServers: {
-          rea: {
+          rea2: {
             type: "stdio",
-            command: "rea",
-            args: ["mcp"],
+            command: process.execPath,
+            args: [resolve("scripts/rea.mjs"), "mcp"],
             env: { REA_MCP_INPUT_SCHEMA_PROFILE: profile },
           },
         },
@@ -76,7 +76,7 @@ for (const profile of ["", "bogus"])
   );
 
 cliTest(
-  "setup preserves a configured compact catalog through CLI migration and MCP startup",
+  "setup preserves owned compact registration and a foreign upstream entry through MCP startup",
   async ({ cli }) => {
     const home = await createTestTempDirectory("rea-pi-environment-cli-");
     const agent = join(home, ".pi", "agent");
@@ -91,6 +91,11 @@ cliTest(
           type: "stdio",
           command: "npx",
           args: ["-y", "rea-agents@1.0.0", "mcp"],
+          env: { REA_LOG_LEVEL: "foreign-retained" },
+        },
+        rea2: {
+          command: process.execPath,
+          args: [resolve("scripts/rea.mjs"), "mcp"],
           env: custom,
         },
       },
@@ -143,14 +148,14 @@ cliTest(
     const registration = z
       .object({
         mcpServers: z.object({
-          rea: z.object({
+          rea2: z.object({
             command: z.string(),
             args: z.array(z.string()),
             env: z.record(z.string(), z.string()).optional(),
           }),
         }),
       })
-      .parse(JSON.parse(configured)).mcpServers.rea;
+      .parse(JSON.parse(configured)).mcpServers.rea2;
     const transport = new StdioClientTransport({
       command: registration.command,
       args: registration.args,
@@ -182,6 +187,9 @@ cliTest(
       await transport.close();
     }
     expect(registration.env).toMatchObject(custom);
+    expect(JSON.parse(configured).mcpServers.rea).toEqual(
+      JSON.parse(original).mcpServers.rea,
+    );
     expect(await readFile(`${config}.rea.backup`, "utf8")).toBe(original);
     const repeated = await cli.run({
       arguments: arguments_,
@@ -195,6 +203,15 @@ cliTest(
       appliedActions: [],
     });
     expect(await readFile(config, "utf8")).toBe(configured);
+    const removed = await cli.run({
+      arguments: ["uninstall", "--json"],
+      cwd: home,
+      environment,
+    });
+    expect(removed.exitCode).toBe(0);
+    expect(JSON.parse(await readFile(config, "utf8"))).toEqual({
+      mcpServers: { rea: JSON.parse(original).mcpServers.rea },
+    });
   },
 );
 
@@ -245,7 +262,6 @@ cliTest(
           target: join("custom-agent", "mcp.json"),
           operation: "update",
         },
-        { id: "install_skill" },
       ],
       appliedActions: [],
     });
@@ -267,24 +283,22 @@ cliTest(
     expect(applied.json).toMatchObject({
       status: "ready",
       clients: { pi: { status: "configured" } },
-      appliedActions: ["configured_pi", "installed_skill"],
+      appliedActions: ["configured_pi"],
     });
     const configured = await readFile(config, "utf8");
     expect(JSON.parse(configured)).toMatchObject({
       mcpServers: {
         other: { command: "other-server" },
-        rea: {
+        rea2: {
           type: "stdio",
-          command: process.platform === "win32" ? process.execPath : cliPath,
-          args: process.platform === "win32" ? [cliPath, "mcp"] : ["mcp"],
+          command: process.execPath,
+          args: [cliPath, "mcp"],
         },
       },
       autoEnableCodemode: false,
     });
     expect(await readFile(`${config}.rea.backup`, "utf8")).toBe(original);
-    expect(await readFile(skill, "utf8")).toContain(
-      "reverse-engineer-anything",
-    );
+    await expect(readFile(skill)).rejects.toMatchObject({ code: "ENOENT" });
 
     const doctor = await run(["doctor", "--client", "pi", "--json"]);
     expect(doctor.exitCode).toBe(0);
@@ -349,7 +363,7 @@ cliTest(
     const text = await readFile(config, "utf8");
     expect(() => JSON.parse(text)).not.toThrow();
     expect(JSON.parse(text)).toMatchObject({
-      mcpServers: { rea: { type: "stdio" } },
+      mcpServers: { rea2: { type: "stdio" } },
     });
     const doctor = await run(["doctor", "--client", "pi", "--json"]);
     expect(doctor.exitCode).toBe(0);
@@ -363,7 +377,7 @@ cliTest(
     });
     await run(["uninstall", "--json"]);
     expect(
-      JSON.parse(await readFile(config, "utf8")).mcpServers.rea,
+      JSON.parse(await readFile(config, "utf8")).mcpServers.rea2,
     ).toBeUndefined();
 
     const blocked = await createTestTempDirectory("rea-pi-cli-malformed-");
@@ -498,6 +512,6 @@ cliTest(
     const piDoctor = await run(["doctor", "--client", "pi", "--json"]);
     expect(piDoctor.exitCode).not.toBe(0);
     expect(piDoctor.json).toMatchObject({ healthy: false });
-    expect((await readdir(home)).sort()).toEqual([".agents", ".codex"]);
+    expect((await readdir(home)).sort()).toEqual([".codex"]);
   },
 );

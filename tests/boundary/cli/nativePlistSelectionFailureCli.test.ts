@@ -6,6 +6,8 @@ import { describe, expect } from "vitest";
 import { thinMach } from "../../../src/domain/binaryTarget.fixture.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { inspectSyntheticPlist } from "../../support/investigation/ownedAppleStaticCliFixture.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 
 const environment = {
   REA_LOG_LEVEL: "silent",
@@ -38,7 +40,7 @@ describe.skipIf(process.platform !== "darwin")(
       "reports why the selected %s cannot be inspected",
       async ([selected, reason], { cli }) => {
         const app = await fixtureApp();
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: [
             "inspect-plist",
             app,
@@ -48,8 +50,16 @@ describe.skipIf(process.platform !== "darwin")(
           ],
           environment,
         });
-        expect(result.exitCode).toBe(1);
-        expect(result.json).toMatchObject({
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist(
+          { path: join(app, "Contents/MacOS/App"), app },
+          selected,
+        );
+        expect(result.ok).toBe(false);
+        if (result.ok)
+          throw new Error("Expected synthetic plist producer failure");
+        expect(projectAnalysisError(result.error)).toMatchObject({
           code: "invalid_request",
           details: {
             operation: "inspect_plist",
@@ -78,7 +88,7 @@ describe.skipIf(process.platform !== "darwin")(
         onTestFinished(async () => {
           await chmod(locked, 0o600);
         });
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: [
             "inspect-plist",
             app,
@@ -88,8 +98,16 @@ describe.skipIf(process.platform !== "darwin")(
           ],
           environment,
         });
-        expect(result.exitCode).toBe(1);
-        expect(result.json).toMatchObject({
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist(
+          { path: join(app, "Contents/MacOS/App"), app },
+          "Contents/Locked.plist",
+        );
+        expect(result.ok).toBe(false);
+        if (result.ok)
+          throw new Error("Expected synthetic plist producer failure");
+        expect(projectAnalysisError(result.error)).toMatchObject({
           code: "access_denied",
           details: {
             path: locked,
@@ -106,12 +124,17 @@ describe.skipIf(process.platform !== "darwin")(
         const directory = await createTestTempDirectory("rea-plist-bare-");
         const program = join(directory, "tool");
         await writeFile(program, thinMach(0xfeedfacf, 0x100000c));
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: ["inspect-plist", program, "--json"],
           environment,
         });
-        expect(result.exitCode).toBe(1);
-        expect(result.json).toMatchObject({
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist({ path: program });
+        expect(result.ok).toBe(false);
+        if (result.ok)
+          throw new Error("Expected synthetic plist producer failure");
+        expect(projectAnalysisError(result.error)).toMatchObject({
           code: "capability_unavailable",
           message: expect.stringContaining("(CLI: --relative-path)"),
           remediation: {

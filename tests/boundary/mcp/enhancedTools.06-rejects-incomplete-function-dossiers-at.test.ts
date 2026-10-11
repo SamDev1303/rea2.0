@@ -10,15 +10,18 @@ afterEach(closeEnhancedToolResources);
 
 describe("analyze_function MCP producer validation", () => {
   it("rejects an incomplete function dossier", async () => {
-    const client = await connect({
-      execute: () =>
-        Promise.resolve(
-          observed({
-            procedure: { address: "0x1", name: "entry" },
-            pseudocode: { text: "plausible but incomplete" },
-          }),
-        ),
-    });
+    const client = await connect(
+      {
+        execute: () =>
+          Promise.resolve(
+            observed({
+              procedure: { address: "0x1", name: "entry" },
+              pseudocode: { text: "plausible but incomplete" },
+            }),
+          ),
+      },
+      [{ name: "analyze_function", arguments: { procedure: "0x1" } }],
+    );
     const result = await client.callTool({
       name: "analyze_function",
       arguments: { procedure: "0x1" },
@@ -48,9 +51,12 @@ describe("analyze_function MCP producer validation", () => {
       delete procedure[field.slice("procedure.".length)];
     } else delete value[field];
 
-    const client = await connect({
-      execute: () => Promise.resolve(observed(value)),
-    });
+    const client = await connect(
+      {
+        execute: () => Promise.resolve(observed(value)),
+      },
+      [{ name: "analyze_function", arguments: { procedure: "0x1" } }],
+    );
     const result = await client.callTool({
       name: "analyze_function",
       arguments: { procedure: "0x1" },
@@ -65,21 +71,24 @@ describe("analyze_function MCP producer validation", () => {
 
   it("rejects a malformed collection in an otherwise complete dossier", async () => {
     const dossier = functionDossierSchema.parse(ghidraFunctionDossier());
-    const client = await connect({
-      execute: () =>
-        Promise.resolve(
-          observed({
-            ...dossier,
-            comments: {
-              items: [],
-              total: 0,
-              returned: 1,
-              truncated: false,
-              next_offset: null,
-            },
-          }),
-        ),
-    });
+    const client = await connect(
+      {
+        execute: () =>
+          Promise.resolve(
+            observed({
+              ...dossier,
+              comments: {
+                items: [],
+                total: 0,
+                returned: 1,
+                truncated: false,
+                next_offset: null,
+              },
+            }),
+          ),
+      },
+      [{ name: "analyze_function", arguments: { procedure: "0x1" } }],
+    );
     const result = await client.callTool({
       name: "analyze_function",
       arguments: { procedure: "0x1" },

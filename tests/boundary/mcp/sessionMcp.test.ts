@@ -1,3 +1,8 @@
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
+import { EvidenceMcpServer } from "../../../src/server/EvidenceMcpServer.js";
+import { ToolResultDelivery } from "../../../src/server/toolResult.js";
+import { registerSessionStatusTool } from "../../../src/server/registerSessionStatusTool.js";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -30,6 +35,7 @@ import { ok as resultOk } from "../../../src/domain/result.js";
 import {
   createSessionMcpHarness,
   snapshotAndRecordUnknown,
+  openOwnedSessionTarget,
 } from "./sessionMcpHarness.js";
 
 const SNAPSHOT_PROFILE = createAnalysisProfile(
@@ -51,7 +57,7 @@ describe("MCP snapshot lifecycle ordering", () => {
     directory = await createTestTempDirectory("rea-mcp-snapshot-order-");
     const started = createDeferred<void>();
     const release = createDeferred<ReturnType<typeof ok>>();
-    const { mcp, first, closed } = await createSessionMcpHarness(
+    const lifecycle = await createSessionMcpHarness(
       directory,
       (closed) => {
         const base = provider(closed);
@@ -74,10 +80,8 @@ describe("MCP snapshot lifecycle ordering", () => {
       },
       resources,
     );
-    expect(
-      (await mcp.callTool({ name: "open_binary", arguments: { path: first } }))
-        .isError,
-    ).not.toBe(true);
+    const { mcp, first, closed } = lifecycle;
+    expect((await openOwnedSessionTarget(lifecycle, first)).ok).toBe(true);
     const observation = mcp.callTool({
       name: "address_name",
       arguments: { address: "0x1000", document: "fixture" },
@@ -114,10 +118,7 @@ describe("MCP snapshot lifecycle ordering", () => {
       ),
     ).toBe(true);
 
-    expect(
-      (await mcp.callTool({ name: "open_binary", arguments: { path: first } }))
-        .isError,
-    ).not.toBe(true);
+    expect((await openOwnedSessionTarget(lifecycle, first)).ok).toBe(true);
     const bytes = await readFile(snapshotPath);
     expect(
       (
@@ -151,8 +152,8 @@ describe("MCP snapshot lifecycle ordering", () => {
   }, 10_000);
 });
 
-describe("target-free MCP lifecycle", () => {
-  it("takes the session snapshot after Android readiness inspection completes", async () => {
+describe("owned target setup and MCP lifecycle observations", () => {
+  it("takes the MCP session snapshot after an inert controller readiness inspection completes", async () => {
     directory = await createTestTempDirectory("rea-mcp-status-readiness-");
     const targetPath = join(directory, "target.hop");
     await writeFile(targetPath, "fixture target");
@@ -168,13 +169,20 @@ describe("target-free MCP lifecycle", () => {
       close: () => Promise.resolve(),
       execute: () => Promise.resolve(ok(null)),
     };
-    const server = createServer(
-      { kind: "session", session },
-      {
-        androidAnalysis,
-        logger: silentLogger,
-      },
+    const server = new EvidenceMcpServer(
+      { name: "owned-readiness", version: "1" },
+      {},
+      undefined,
+      new ToolResultDelivery(8 * 1024 * 1024),
     );
+    registerSessionStatusTool({
+      server,
+      session,
+      contract: toolContract("binary_session"),
+      startedAt: new Date().toISOString(),
+      availabilityPolicy: () => ({ processCaptureEnabled: false }),
+      androidAnalysisAvailability: () => androidAnalysis.inspectAvailability!(),
+    });
     const mcp = new Client({ name: "status-readiness", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
@@ -198,7 +206,7 @@ describe("target-free MCP lifecycle", () => {
     });
   });
 
-  it("reopens replaced content at one canonical path through MCP", async () => {
+  it("reports controller-reopened replaced content at one canonical path through MCP", async () => {
     directory = await createTestTempDirectory("rea-mcp-replaced-target-");
     const targetPath = join(directory, "mutable.hop");
     await writeFile(targetPath, "first");
@@ -215,25 +223,33 @@ describe("target-free MCP lifecycle", () => {
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     resources.push(mcp, server);
+    await attachNonexecutingMcpFixture(server, session, [
+      { name: "current_document", arguments: {} },
+    ]);
     await server.connect(serverTransport);
     await mcp.connect(clientTransport);
 
-    const first = structured(
-      await mcp.callTool({
-        name: "open_binary",
-        arguments: { path: targetPath },
-      }),
-    ).result;
+    expect(
+      (
+        await mcp.callTool({
+          name: "open_binary",
+          arguments: { path: targetPath },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(session.activeTarget()).toBeUndefined();
+    const firstOpen = await session.open(targetPath);
+    expect(firstOpen.ok).toBe(true);
+    if (!firstOpen.ok) throw firstOpen.error;
+    const first = firstOpen.value;
     expect(
       (await mcp.callTool({ name: "current_document", arguments: {} })).isError,
     ).not.toBe(true);
     await writeFile(targetPath, "second");
-    const second = structured(
-      await mcp.callTool({
-        name: "open_binary",
-        arguments: { path: targetPath },
-      }),
-    ).result;
+    const secondOpen = await session.open(targetPath);
+    expect(secondOpen.ok).toBe(true);
+    if (!secondOpen.ok) throw secondOpen.error;
+    const second = secondOpen.value;
 
     const canonicalTargetPath = await realpath(targetPath);
     expect(first).toMatchObject({ path: canonicalTargetPath });
@@ -262,8 +278,8 @@ describe("target-free MCP lifecycle", () => {
   }, 30_000);
 });
 
-describe("target-free MCP workflow", () => {
-  it("reports no-target, opens, analyzes, switches, reports status, and closes", async () => {
+describe("owned target setup and MCP workflow", () => {
+  it("reports no-target, observes controller opening and switching, analyzes, reports status, and closes", async () => {
     directory = await createTestTempDirectory("rea-mcp-session-");
     const lifecycle = await createSessionMcpHarness(
       directory,
@@ -272,6 +288,18 @@ describe("target-free MCP workflow", () => {
     );
     const { mcp, first, second, closed } = lifecycle;
 
+    expect(
+      (await mcp.callTool({ name: "open_binary", arguments: { path: first } }))
+        .isError,
+    ).toBe(true);
+    expect(lifecycle.session.activeTarget()).toBeUndefined();
+    expect(
+      structured(await mcp.callTool({ name: "binary_session", arguments: {} }))
+        .result,
+    ).toMatchObject({ open: false });
+    expect(
+      (await mcp.callTool({ name: "current_document", arguments: {} })).isError,
+    ).toBe(true);
     const beforeTools = (await mcp.listTools()).tools;
     const beforeNames = beforeTools.map(({ name }) => name);
     expect(mcp.getInstructions()).toContain(
@@ -284,10 +312,7 @@ describe("target-free MCP workflow", () => {
     expect(beforeNames).toContain("binary_session");
     expect(beforeNames).toContain("current_document");
     expect(beforeNames).toContain("capture_process_scenario");
-    expect(
-      (await mcp.callTool({ name: "open_binary", arguments: { path: first } }))
-        .isError,
-    ).not.toBe(true);
+    expect((await openOwnedSessionTarget(lifecycle, first)).ok).toBe(true);
     const openedStatus = structured(
       await mcp.callTool({ name: "binary_session", arguments: {} }),
     );
@@ -342,7 +367,7 @@ describe("target-free MCP workflow", () => {
         }),
       ).result,
     ).toMatchObject({ valid: true, truthVerified: false });
-    await mcp.callTool({ name: "open_binary", arguments: { path: second } });
+    expect((await openOwnedSessionTarget(lifecycle, second)).ok).toBe(true);
     expect(closed.some((path) => path.endsWith("first.hop"))).toBe(true);
     expect(
       text(await mcp.callTool({ name: "binary_session", arguments: {} })),
@@ -380,13 +405,11 @@ describe("target-free MCP workflow", () => {
         .result,
     ).toMatchObject({ items: [] });
     expect(
-      (
-        await mcp.callTool({
-          name: "open_binary",
-          arguments: { path: second, snapshot_path: snapshotPath },
-        })
-      ).isError,
-    ).not.toBe(true);
+      (await openOwnedSessionTarget(lifecycle, first, snapshotPath)).ok,
+    ).toBe(false);
+    expect(
+      (await openOwnedSessionTarget(lifecycle, second, snapshotPath)).ok,
+    ).toBe(true);
     await mcp.callTool({ name: "close_binary", arguments: {} });
   }, 10_000);
 });
@@ -394,11 +417,12 @@ describe("target-free MCP workflow", () => {
 describe("session filesystem path boundaries over MCP", () => {
   it("rejects relative snapshot and export paths with an absolute-path error", async () => {
     directory = await createTestTempDirectory("rea-mcp-path-boundary-");
-    const { mcp, first } = await createSessionMcpHarness(
+    const lifecycle = await createSessionMcpHarness(
       directory,
       provider,
       resources,
     );
+    const { mcp, first } = lifecycle;
 
     const exported = await mcp.callTool({
       name: "export_evidence_bundle",
@@ -407,11 +431,7 @@ describe("session filesystem path boundaries over MCP", () => {
     expect(exported.isError, JSON.stringify(exported.content)).toBe(true);
     expect(JSON.stringify(exported.content)).toContain("absolute");
 
-    const opened = await mcp.callTool({
-      name: "open_binary",
-      arguments: { path: first },
-    });
-    expect(opened.isError, JSON.stringify(opened.content)).not.toBe(true);
+    expect((await openOwnedSessionTarget(lifecycle, first)).ok).toBe(true);
     const closed = await mcp.callTool({
       name: "close_binary",
       arguments: { snapshot_path: "relative-analysis.json" },

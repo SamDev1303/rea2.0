@@ -20,6 +20,7 @@ export type ReleaseLookupFailure =
 
 /** Effects used to update and verify one identified REA installation. */
 export interface UpdateHost {
+  readonly localBuild?: boolean;
   installation(): Promise<NpmInstallation | undefined>;
   latestVersion(
     installation: NpmInstallation | undefined,
@@ -128,6 +129,15 @@ export const runUpdate = async (
   host: UpdateHost,
   output: UpdateOutput = "human",
 ): Promise<UpdateResult> => {
+  if (host.localBuild === true)
+    return {
+      status: "failed",
+      currentVersion,
+      latestVersion: null,
+      reason: "unknown-install-method",
+      remediation:
+        "REA 2.0 runs our local checkout. Automatic npm updates are disabled. Review changes in SamDev1303/rea2.0 on an isolated branch, run the checks and independent reviews, then rebuild this checkout. No upstream package will be downloaded.",
+    };
   const installation = await host.installation();
   const release = await host.latestVersion(installation);
   const latestVersion = release.ok ? release.value : null;
@@ -154,7 +164,7 @@ export const runUpdate = async (
       latestVersion: targetVersion,
       reason: "unknown-install-method",
       remediation:
-        "Update this installation with the package manager or source checkout that owns it. For a one-off latest invocation, use npx rea-agents@latest.",
+        "Update this installation with the package manager or source checkout that owns it. REA 2.0 does not use upstream package runners.",
     };
   const installed = await host.installVersion(
     installation,

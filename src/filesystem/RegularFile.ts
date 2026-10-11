@@ -2,7 +2,13 @@ import { constants } from "node:fs";
 import type { BigIntStats, Stats } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 
+import { OwnedStaticFixtureCleanupFailure } from "./OwnedStaticResource.js";
 import { OwnedFileHandle } from "./OwnedFileHandle.js";
+import {
+  assertOwnedStaticFixtureAcquisition,
+  assertOwnedStaticFixtureDescriptor,
+  retainOwnedStaticFixtureCleanup,
+} from "./OwnedStaticReadBoundary.js";
 
 /** Identifies a selected path that cannot be read as one regular file. */
 export class NonRegularFileReadError extends Error {
@@ -60,6 +66,7 @@ export const openRegularFile = async (
   },
 ): Promise<FileHandle> => {
   options.signal?.throwIfAborted();
+  await assertOwnedStaticFixtureAcquisition(path, "file");
   const handle = await open(
     path,
     constants.O_RDONLY |
@@ -71,6 +78,7 @@ export const openRegularFile = async (
   try {
     options.signal?.throwIfAborted();
     const metadata = await handle.stat();
+    await assertOwnedStaticFixtureDescriptor(path, metadata);
     options.signal?.throwIfAborted();
     if (!metadata.isFile())
       throw new NonRegularFileReadError(path, metadata.isDirectory());
@@ -79,6 +87,12 @@ export const openRegularFile = async (
     try {
       await owner.close();
     } catch (cleanupCause: unknown) {
+      const failure = new OwnedStaticFixtureCleanupFailure(
+        { kind: "file", owner, scope: "parser" },
+        { kind: "failed", cause },
+        cleanupCause,
+      );
+      retainOwnedStaticFixtureCleanup(failure);
       throw new RegularFileAdmissionFailure(path, cause, cleanupCause, owner);
     }
     throw cause;

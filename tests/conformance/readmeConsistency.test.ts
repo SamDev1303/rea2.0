@@ -40,21 +40,27 @@ describe("onboarding documentation product facts", () => {
     expect(jsonExamples(content)).toContainEqual(
       expect.objectContaining({
         mcpServers: expect.objectContaining({
-          rea: expect.objectContaining({
-            command: "npx",
-            args: ["-y", PRODUCT_IDENTITY.registrationPackageSpecifier, "mcp"],
+          [PRODUCT_IDENTITY.mcpServerKey]: expect.objectContaining({
+            command: "NODE_EXECUTABLE",
+            args: ["APPROVED_CHECKOUT/scripts/rea.mjs", "mcp"],
           }),
         }),
       }),
     );
   });
 
-  it("keeps translated onboarding commands aligned with the English examples", async () => {
-    const english = shellExamples(await readFile(resolve("README.md"), "utf8"));
-    for (const path of translatedReadmes)
+  it("marks translated npm onboarding as historical upstream documentation", async () => {
+    const english = await readFile(resolve("README.md"), "utf8");
+    expect(english).toContain(
+      "Translated READMEs are historical upstream documentation",
+    );
+    expect(english).toContain("not instructions for this fork");
+    for (const path of translatedReadmes) {
+      expect(english, path).toContain(path);
       expect(
-        shellExamples(await readFile(resolve(path), "utf8")),
+        shellExamples(await readFile(resolve(path), "utf8")).length,
         path,
-      ).toEqual(english);
+      ).toBeGreaterThan(0);
+    }
   });
 });

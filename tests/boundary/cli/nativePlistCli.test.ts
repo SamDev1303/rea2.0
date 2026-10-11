@@ -8,6 +8,8 @@ import { describe, expect } from "vitest";
 import { thinMach } from "../../../src/domain/binaryTarget.fixture.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { inspectSyntheticPlist } from "../../support/investigation/ownedAppleStaticCliFixture.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 
 describe.skipIf(process.platform !== "darwin")(
   "native plist CLI selection",
@@ -36,7 +38,7 @@ describe.skipIf(process.platform !== "darwin")(
             `<plist><dict><key>CFBundleExecutable</key><string>App</string><key>CFBundleIdentifier</key><string>${value}</string></dict></plist>`,
           );
         }
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: [
             "inspect-plist",
             app,
@@ -48,13 +50,24 @@ describe.skipIf(process.platform !== "darwin")(
             REA_ANALYSIS_PROVIDER: "auto",
           },
         });
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist(
+          { path: join(app, "Contents/MacOS/App"), app },
+          selected,
+        );
         if (identifier === undefined) {
-          expect(result.exitCode).toBe(1);
-          expect(result.json).toMatchObject({ error: "Analysis failed" });
+          expect(result.ok).toBe(false);
+          if (result.ok)
+            throw new Error("Expected synthetic plist producer failure");
+          expect(projectAnalysisError(result.error)).toMatchObject({
+            code: "invalid_request",
+          });
         } else {
-          expect(result.exitCode).toBe(0);
-          expect(result.json).toMatchObject({
-            normalized_result: {
+          expect(result.ok).toBe(true);
+          if (!result.ok) throw result.error;
+          expect(result.value).toMatchObject({
+            result: {
               source_path: join(app, selected ?? "Contents/Info.plist"),
               value: { CFBundleIdentifier: identifier },
             },
@@ -99,16 +112,23 @@ describe.skipIf(process.platform !== "darwin")(
             "--",
             plist,
           ]);
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: ["inspect-plist", app, "--json"],
           environment: {
             REA_LOG_LEVEL: "silent",
             REA_ANALYSIS_PROVIDER: "auto",
           },
         });
-        expect(result.exitCode).toBe(0);
-        expect(result.json).toMatchObject({
-          normalized_result: {
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist({
+          path: join(app, "Contents/MacOS/App"),
+          app,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw result.error;
+        expect(result.value).toMatchObject({
+          result: {
             format,
             value: {
               CFBundleIdentifier: "com.example.types",
@@ -171,16 +191,23 @@ describe.skipIf(process.platform !== "darwin")(
             "</dict></plist>",
           ].join(""),
         );
-        const result = await cli.run({
+        const denied = await cli.run({
           arguments: ["inspect-plist", app, "--json"],
           environment: {
             REA_LOG_LEVEL: "silent",
             REA_ANALYSIS_PROVIDER: "auto",
           },
         });
-        expect(result.exitCode).toBe(0);
-        expect(result.json).toMatchObject({
-          normalized_result: {
+        expect(denied.exitCode).toBe(1);
+        expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+        const result = await inspectSyntheticPlist({
+          path: join(app, "Contents/MacOS/App"),
+          app,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw result.error;
+        expect(result.value).toMatchObject({
+          result: {
             value: {
               Max: { $plist_type: "integer", decimal: "18446744073709551615" },
               Min: { $plist_type: "integer", decimal: "-9223372036854775808" },

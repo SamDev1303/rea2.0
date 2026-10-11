@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -16,10 +15,10 @@ import { createServer } from "../../../src/server/createServer.js";
 import { silentLogger } from "../../../src/logger.js";
 import { itWithCaptureCapability } from "./processCaptureCapability.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
-
-const processFixture = fileURLToPath(
-  new URL("../../fixtures/processFidelity.mjs", import.meta.url),
-);
+import {
+  attachOwnedProcessMcpFixture,
+  prepareOwnedProcessMcpFixture,
+} from "../../support/investigation/ownedProcessCliFixture.js";
 const resources: Array<{ close(): Promise<unknown> }> = [];
 
 afterEach(async () => {
@@ -73,26 +72,30 @@ it("rejects oversized initial and resize terminal buffers through MCP before lau
 itWithCaptureCapability(
   "records process residuals linked to capture Evidence",
   async () => {
+    const root = await createTestTempDirectory("rea-process-residual-");
+    const fixture = await prepareOwnedProcessMcpFixture({
+      root,
+      source: "process.stdout.write('partial-frame\\n');",
+    });
     const session = createTestBinarySession(createCacheProvider([]));
     const server = createServer(
       { kind: "session", session },
       {
         logger: silentLogger,
+        environment: {},
       },
     );
     const mcp = new Client({ name: "process-unknown", version: "1.0.0" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
-    resources.push(mcp, server);
+    resources.push(mcp, server, session);
+    await attachOwnedProcessMcpFixture(server, fixture);
     await server.connect(serverTransport);
     await mcp.connect(clientTransport);
 
     const captured = await mcp.callTool({
       name: "capture_process_scenario",
-      arguments: {
-        executable: process.execPath,
-        arguments: [processFixture, "partial"],
-      },
+      arguments: fixture.input,
     });
     expect(captured.isError, JSON.stringify(captured.content)).not.toBe(true);
     const contract = toolContract("capture_process_scenario");
@@ -110,6 +113,10 @@ itWithCaptureCapability(
     expect(
       contract.outputSchema.safeParse(captured.structuredContent).success,
     ).toBe(true);
+    const evidence = contract.outputSchema.parse(captured.structuredContent);
+    expect(evidence.normalized_result.manifest.scenario.arguments).toEqual(
+      fixture.input.arguments,
+    );
     const listedUnknowns = await mcp.callTool({
       name: "list_unknowns",
       arguments: {},

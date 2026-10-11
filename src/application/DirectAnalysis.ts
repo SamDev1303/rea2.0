@@ -3,7 +3,7 @@ import type { JsonValue } from "../domain/jsonValue.js";
 import { EnhancedTools } from "./EnhancedTools.js";
 import { executeFunctionAnalysisEvidence } from "./FunctionAnalysisEvidence.js";
 import type { DirectAnalysisDependencies } from "./DirectAnalysisDependencies.js";
-import type { BinarySession } from "./binary/BinarySession.js";
+import type { BinarySessionPort } from "./binary/BinarySessionPort.js";
 import type { SessionProviderRoute } from "./binary/SessionProviderRouter.js";
 import type { ResolvedSessionOpen } from "./binary/BinarySessionOpen.js";
 import { silentLogger } from "../logger.js";
@@ -319,7 +319,7 @@ const runAnalysis = async (
 };
 
 const executeAnalysisTool = async (input: {
-  readonly session: BinarySession;
+  readonly session: BinarySessionPort;
   readonly openedTarget: BinaryTarget;
   readonly tool:
     | NativeToolName
@@ -514,7 +514,7 @@ const providerIdentityForRoute = (
 };
 
 const analysisProfileForEvidence = (
-  session: BinarySession,
+  session: BinarySessionPort,
   tool:
     | NativeToolName
     | ArtifactAnalysisOperation

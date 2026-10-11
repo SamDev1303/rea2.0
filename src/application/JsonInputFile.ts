@@ -1,3 +1,4 @@
+import { admitInvestigationPath } from "./investigationSafety/InvestigationAdmission.js";
 import { constants } from "node:buffer";
 import type { FileHandle } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
@@ -38,13 +39,14 @@ const nativeParseFits = (inputBytes: number): boolean =>
     getHeapStatistics().total_available_size;
 
 /** Parse strict UTF-8 JSON without requiring a whole-document string. */
-export const readJsonInputFile = (
+export const readJsonInputFile = async (
   path: string,
   operation: string,
   signal?: AbortSignal,
-): Promise<Result<unknown, JsonInputFileFailure>> =>
-  withRegularFile(
-    path,
+): Promise<Result<unknown, JsonInputFileFailure>> => {
+  const admittedPath = await admitInvestigationPath(operation, path);
+  return withRegularFile(
+    admittedPath,
     async (handle, stats) => {
       let found = false;
       let value: unknown;
@@ -137,8 +139,9 @@ export const readJsonInputFile = (
         throw cause;
       }
     },
-    { signal },
+    { signal, symlinks: "reject", hardlinks: "reject" },
   );
+};
 
 const packJsonScalars = (
   operation: string,

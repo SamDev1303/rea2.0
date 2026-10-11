@@ -1,6 +1,8 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { WebRuntimeService } from "../../../src/application/WebRuntimeService.js";
 import { recordingWebRuntimePort } from "../../../src/application/WebRuntimeService.fixture.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
@@ -8,14 +10,18 @@ import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 
-it("advertises actual SDK schemas, instrumentation effects and session-owned inline runtime evidence", async () => {
+it("advertises actual SDK schemas, instrumentation effects and retained direct recording-service Evidence with public runtime denied", async () => {
   const session = createTestBinarySession(() => {
     throw new Error("Binary provider must not start");
   });
+  const port = recordingWebRuntimePort();
+  const observed = vi.spyOn(port, "observeExecution");
+  const inspected = vi.spyOn(port, "inspectEventListeners");
+  const service = new WebRuntimeService(port);
   const server = createServer(
     { kind: "session", session },
     {
-      webRuntime: new WebRuntimeService(recordingWebRuntimePort()),
+      webRuntime: service,
     },
   );
   const client = new Client({ name: "web-runtime-contract", version: "1" });
@@ -55,15 +61,21 @@ it("advertises actual SDK schemas, instrumentation effects and session-owned inl
             selector: "#selected",
           };
     expect(ajv.validate(inputSchema, args)).toBe(true);
-    const response = await client.callTool({ name, arguments: args });
-    expect(response.isError).not.toBe(true);
+    await assertOwnedFixturePublicDenial(client, name, args);
+    const selected = name === "observe_web_execution" ? observed : inspected;
+    expect(selected).not.toHaveBeenCalled();
+    const response = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await (name === "observe_web_execution"
+        ? service.observe(args)
+        : service.inspect(args)),
+    );
     expect(
-      ajv.validate(outputSchema, response.structuredContent),
+      ajv.validate(outputSchema, response),
       JSON.stringify(ajv.errors),
     ).toBe(true);
-    const parsed = toolContract(name).outputSchema.parse(
-      response.structuredContent,
-    );
+    const parsed = toolContract(name).outputSchema.parse(response);
     const evidence = parseEvidence(parsed);
     expect(session.evidenceById(evidence.evidence_id)).toEqual(evidence);
   }

@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
+import pino from "pino";
+import { registerElectronCommands } from "../../../src/cli/electronCommands.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
@@ -225,13 +228,21 @@ const runCli = async (
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv,
 ): Promise<unknown> => {
+  const internal = ["list-electron-targets", "inspect-electron-page"].includes(
+    arguments_[0] ?? "",
+  );
+  let publicOutput: unknown;
   try {
     const { stdout } = await execute(
       process.execPath,
       ["scripts/rea.mjs", ...arguments_],
-      { cwd: process.cwd(), env: environment, maxBuffer: 16 * 1_024 * 1_024 },
+      {
+        cwd: process.cwd(),
+        env: { PATH: environment.PATH ?? "" },
+        maxBuffer: 16 * 1_024 * 1_024,
+      },
     );
-    return JSON.parse(stdout);
+    publicOutput = JSON.parse(stdout);
   } catch (cause: unknown) {
     if (
       typeof cause === "object" &&
@@ -239,7 +250,18 @@ const runCli = async (
       "stdout" in cause &&
       typeof cause.stdout === "string"
     )
-      return JSON.parse(cause.stdout);
-    throw cause;
+      publicOutput = JSON.parse(cause.stdout);
+    else throw cause;
   }
+  if (!internal) return publicOutput;
+  expect(publicOutput).toMatchObject({ code: "capability_unavailable" });
+  // Actual maintained registration and service on authored fixtures; this is
+  // separate from public acquisition and confers no protected-host authority.
+  return (
+    await serveRegisteredCliFixture(
+      (registered) =>
+        registerElectronCommands(registered, pino({ level: "silent" }), {}),
+      arguments_,
+    )
+  ).json;
 };

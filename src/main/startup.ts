@@ -1,3 +1,4 @@
+import { investigationOperationDenial } from "../application/investigationSafety/InvestigationAdmission.js";
 import type { BinarySession } from "../application/binary/BinarySession.js";
 import type { AppConfig } from "../config/types.js";
 import type { Logger } from "pino";
@@ -12,6 +13,11 @@ export const openInitialTarget = async (
   { readonly ok: true } | { readonly ok: false; readonly exitCode: 1 }
 > => {
   if (config.hopperTargetPath === undefined) return { ok: true };
+  const denied = investigationOperationDenial("open_binary");
+  if (denied !== undefined) {
+    writeStderr(`${projectAnalysisError(denied).message}\n`);
+    return { ok: false, exitCode: 1 };
+  }
   const opened = await session.open(config.hopperTargetPath, {
     targetKind: config.hopperTargetKind,
   });

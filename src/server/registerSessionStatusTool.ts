@@ -4,6 +4,11 @@ import type { BinarySessionPort } from "../application/binary/BinarySessionPort.
 import type { ProviderAvailability } from "../application/AnalysisProvider.js";
 import { AnalysisCancelledError } from "../domain/analysisErrorCore.js";
 import { buildCapabilityInventory } from "../application/CapabilityInventory.js";
+import {
+  projectProtectedProviderStatus,
+  projectProtectedToolAvailability,
+} from "../application/investigationSafety/ProtectedCapabilityPresentation.js";
+import { listOwnedFixtureOperations } from "../application/investigationSafety/OwnedFixturePolicy.js";
 import { toolContract } from "../contracts/toolContracts.js";
 import type { ClientFeatureAvailability } from "../contracts/toolOutputSchemaPrimitives.js";
 import { jsonObjectSchema } from "../domain/jsonValue.js";
@@ -60,14 +65,18 @@ export const registerSessionStatusTool = (
         );
       }
       const status = session.status();
-      const statusObject = jsonObjectSchema.parse(status);
-      const toolAvailability = buildCapabilityInventory(
-        status,
-        {
-          ...availabilityPolicy(),
-          androidAnalysisAvailability: androidAvailability,
-        },
-        clientFeatures,
+      const statusObject = jsonObjectSchema.parse(
+        projectProtectedProviderStatus(status),
+      );
+      const toolAvailability = projectProtectedToolAvailability(
+        buildCapabilityInventory(
+          status,
+          {
+            ...availabilityPolicy(),
+            androidAnalysisAvailability: androidAvailability,
+          },
+          clientFeatures,
+        ),
       );
       const serverIdentity = createServerIdentity({
         startedAt,
@@ -89,7 +98,12 @@ export const registerSessionStatusTool = (
         {
           ok: true,
           value: projectSessionStatus({
-            status: statusObject,
+            status: {
+              ...statusObject,
+              owned_fixture_scope: listOwnedFixtureOperations(server).map(
+                (grant) => ({ ...grant }),
+              ),
+            },
             toolAvailability,
             serverIdentity,
             clientFeatures,

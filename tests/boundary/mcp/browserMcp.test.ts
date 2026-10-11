@@ -1,3 +1,17 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import {
+  assertOwnedFixturePublicDenial,
+  projectOwnedProducerError,
+} from "../../fixtures/ownedArtifactProducer.js";
+import {
+  listBrowserTargets,
+  inspectWebPage,
+  analyzeWebBundle,
+  observeWebSession,
+  discoverWebMcpTools,
+  captureWebScreenshot,
+} from "../../../src/application/BrowserObservationService.js";
+import type { Evidence } from "../../../src/domain/evidence.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { crc32, deflateSync } from "node:zlib";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -10,7 +24,10 @@ import { CdpBrowserProvider } from "../../../src/browser/CdpBrowserProvider.js";
 import { webPageInspectionSchema } from "../../../src/domain/browserObservationSchemas.js";
 import { createWebScreenshotArtifact } from "../../../src/domain/webScreenshot.js";
 import { JAVASCRIPT_RUNTIME_RECONCILIATION_EXAMPLE } from "../../../src/contracts/javascript/javascriptRuntimeReconciliationExample.js";
-import { TOOL_CONTRACTS } from "../../../src/contracts/toolContracts.js";
+import {
+  TOOL_CONTRACTS,
+  toolContract,
+} from "../../../src/contracts/toolContracts.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { observed } from "../../fixtures/analysisExecution.js";
 import {
@@ -30,7 +47,7 @@ afterEach(async () => {
 });
 
 it(
-  "exposes CLI-equivalent Evidence results and session tools",
+  "retains direct owned-loopback browser Evidence and exposes MCP session workflows while public observation is denied",
   async () => {
     const browser = await startFakeCdpBrowser({
       sessionTimeline: "same_origin",
@@ -68,34 +85,54 @@ it(
         ]),
       },
     });
-    const listed = await connected.client.callTool({
-      name: "list_browser_targets",
-      arguments: {
-        cdp_endpoint: browser.endpoint,
-      },
-    });
-    expect(listed.isError).not.toBe(true);
-    expect(listed.structuredContent).toMatchObject({
+    const listedInput = {
+      cdp_endpoint: browser.endpoint,
+    };
+    await denyFixtureBrowser(
+      connected,
+      browser,
+      "list_browser_targets",
+      listedInput,
+    );
+    const listed = await retainOwnedServiceEvidence(
+      connected.session,
+      connected.client,
+      await listBrowserTargets(
+        connected.provider,
+        toolContract("list_browser_targets").inputSchema.parse(listedInput),
+      ),
+    );
+    expect(listed).toMatchObject({
       normalized_result: {
         targets: expect.arrayContaining([
           expect.objectContaining({ target_id: "allowed-page" }),
         ]),
       },
     });
-    const inspected = await connected.client.callTool({
-      name: "inspect_web_page",
-      arguments: {
-        cdp_endpoint: browser.endpoint,
-        target_id: "allowed-page",
-        observation_ms: 0,
-        include_console_text: true,
-        include_json_body_shapes: true,
-        include_websocket_shapes: true,
-        include_script_sources: true,
-      },
-    });
-    expect(inspected.isError).not.toBe(true);
-    expect(inspected.structuredContent).toMatchObject({
+    const inspectedInput = {
+      cdp_endpoint: browser.endpoint,
+      target_id: "allowed-page",
+      observation_ms: 0,
+      include_console_text: true,
+      include_json_body_shapes: true,
+      include_websocket_shapes: true,
+      include_script_sources: true,
+    };
+    await denyFixtureBrowser(
+      connected,
+      browser,
+      "inspect_web_page",
+      inspectedInput,
+    );
+    const inspected = await retainOwnedServiceEvidence(
+      connected.session,
+      connected.client,
+      await inspectWebPage(
+        connected.provider,
+        toolContract("inspect_web_page").inputSchema.parse(inspectedInput),
+      ),
+    );
+    expect(inspected).toMatchObject({
       normalized_result: {
         target: { target_id: "allowed-page" },
         console: { prior_activity_available: false },
@@ -113,7 +150,7 @@ it(
       name: "reconcile_javascript_runtime",
       arguments: {
         static_layers: JAVASCRIPT_RUNTIME_RECONCILIATION_EXAMPLE.static_layers,
-        runtime_observations: [evidenceFor(inspected.structuredContent)],
+        runtime_observations: [evidenceFor(inspected)],
       },
     });
     expect(reconciled.isError).not.toBe(true);
@@ -123,16 +160,26 @@ it(
     expect(JSON.stringify(reconciled.structuredContent)).not.toContain(
       "source-secret",
     );
-    const analyzed = await connected.client.callTool({
-      name: "analyze_web_bundle",
-      arguments: {
-        cdp_endpoint: browser.endpoint,
-        target_id: "allowed-page",
-        observation_ms: 0,
-      },
-    });
-    expect(analyzed.isError).not.toBe(true);
-    expect(analyzed.structuredContent).toMatchObject({
+    const analyzedInput = {
+      cdp_endpoint: browser.endpoint,
+      target_id: "allowed-page",
+      observation_ms: 0,
+    };
+    await denyFixtureBrowser(
+      connected,
+      browser,
+      "analyze_web_bundle",
+      analyzedInput,
+    );
+    const analyzed = await retainOwnedServiceEvidence(
+      connected.session,
+      connected.client,
+      await analyzeWebBundle(
+        connected.provider,
+        toolContract("analyze_web_bundle").inputSchema.parse(analyzedInput),
+      ),
+    );
+    expect(analyzed).toMatchObject({
       normalized_result: {
         capture: { scripts_analyzed: 1 },
         observations: { source_maps: { status: "not_requested" } },
@@ -146,19 +193,31 @@ it(
 const verifySessionAndComparisonTools = async (
   connected: Awaited<ReturnType<typeof connectBrowser>>,
   browser: FakeCdpBrowser,
-  inspected: Awaited<ReturnType<Client["callTool"]>>,
+  inspected: Evidence,
 ): Promise<void> => {
-  const observedSession = await connected.client.callTool({
-    name: "observe_web_session",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-      allowed_origins: [browser.allowedOrigin],
-      target_id: "allowed-page",
-      observation_ms: 5,
-    },
-  });
-  expect(observedSession.isError).not.toBe(true);
-  expect(observedSession.structuredContent).toMatchObject({
+  const observedSessionInput = {
+    cdp_endpoint: browser.endpoint,
+    allowed_origins: [browser.allowedOrigin],
+    target_id: "allowed-page",
+    observation_ms: 5,
+  };
+  await denyFixtureBrowser(
+    connected,
+    browser,
+    "observe_web_session",
+    observedSessionInput,
+  );
+  const observedSession = await retainOwnedServiceEvidence(
+    connected.session,
+    connected.client,
+    await observeWebSession(
+      connected.provider,
+      toolContract("observe_web_session").inputSchema.parse(
+        observedSessionInput,
+      ),
+    ),
+  );
+  expect(observedSession).toMatchObject({
     normalized_result: {
       window: { end_reason: "window_elapsed" },
       timeline: expect.arrayContaining([
@@ -166,24 +225,34 @@ const verifySessionAndComparisonTools = async (
       ]),
     },
   });
-  const webMcp = await connected.client.callTool({
-    name: "discover_webmcp_tools",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-      allowed_origins: [browser.allowedOrigin],
-      target_id: "allowed-page",
-      observation_ms: 0,
-    },
-  });
-  expect(webMcp.isError).not.toBe(true);
-  expect(webMcp.structuredContent).toMatchObject({
+  const webMcpInput = {
+    cdp_endpoint: browser.endpoint,
+    allowed_origins: [browser.allowedOrigin],
+    target_id: "allowed-page",
+    observation_ms: 0,
+  };
+  await denyFixtureBrowser(
+    connected,
+    browser,
+    "discover_webmcp_tools",
+    webMcpInput,
+  );
+  const webMcp = await retainOwnedServiceEvidence(
+    connected.session,
+    connected.client,
+    await discoverWebMcpTools(
+      connected.provider,
+      toolContract("discover_webmcp_tools").inputSchema.parse(webMcpInput),
+    ),
+  );
+  expect(webMcp).toMatchObject({
     normalized_result: {
       tools: {
         items: [expect.objectContaining({ name: "search_orders" })],
       },
     },
   });
-  const capture = normalizedResultOf(inspected.structuredContent);
+  const capture = normalizedResultOf(inspected);
   const compared = await connected.client.callTool({
     name: "compare_web_captures",
     arguments: {
@@ -195,64 +264,27 @@ const verifySessionAndComparisonTools = async (
   expect(compared.structuredContent).toMatchObject({
     normalized_result: { overall_status: "unknown" },
   });
-  const parsedCapture = webPageInspectionSchema.parse(capture);
-  const socket = parsedCapture.network.websocket_connections
-    .flatMap((connection) => connection.events)
-    .find((event) => event.payload_shape?.json_shape != null);
-  const payload = socket?.payload_shape;
-  if (socket === undefined || payload == null || payload.json_shape === null)
-    throw new Error("Missing deep WebSocket JSON shape fixture");
-  const malformedCapture = {
-    ...parsedCapture,
-    network: {
-      ...parsedCapture.network,
-      websocket_connections: parsedCapture.network.websocket_connections.map(
-        (connection) => ({
-          ...connection,
-          events: connection.events.map((event) =>
-            event === socket
-              ? {
-                  ...event,
-                  payload_shape: {
-                    ...payload,
-                    json_shape: {
-                      ...payload.json_shape,
-                      properties: [
-                        { path: "/event", types: [42], observations: 1 },
-                      ],
-                    },
-                  },
-                }
-              : event,
-          ),
-        }),
-      ),
-    },
+  await assertMalformedCaptureComparisons(connected.client, capture);
+  const screenshotInput = {
+    cdp_endpoint: browser.endpoint,
+    allowed_origins: [browser.allowedOrigin],
+    target_id: "allowed-page",
   };
-  const malformedComparison = await connected.client.callTool({
-    name: "compare_web_captures",
-    arguments: {
-      before: { inspection: malformedCapture },
-      after: { inspection: capture },
-    },
-  });
-  expect(malformedComparison.isError).toBe(true);
-  expect(JSON.stringify(malformedComparison.content)).toContain("types");
-  const incompleteComparison = await connected.client.callTool({
-    name: "compare_web_captures",
-    arguments: { before: { inspection: capture } },
-  });
-  expect(incompleteComparison.isError).toBe(true);
-  const screenshot = await connected.client.callTool({
-    name: "capture_web_screenshot",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-      allowed_origins: [browser.allowedOrigin],
-      target_id: "allowed-page",
-    },
-  });
-  expect(screenshot.isError).not.toBe(true);
-  const screenshotArtifact = artifactOf(screenshot.structuredContent);
+  await denyFixtureBrowser(
+    connected,
+    browser,
+    "capture_web_screenshot",
+    screenshotInput,
+  );
+  const screenshot = await retainOwnedServiceEvidence(
+    connected.session,
+    connected.client,
+    await captureWebScreenshot(
+      connected.provider,
+      toolContract("capture_web_screenshot").inputSchema.parse(screenshotInput),
+    ),
+  );
+  const screenshotArtifact = artifactOf(screenshot);
   const visual = await connected.client.callTool({
     name: "compare_web_screenshots",
     arguments: {
@@ -266,7 +298,7 @@ const verifySessionAndComparisonTools = async (
   });
 
   await assertScreenshotPngFailures(connected.client);
-  expect(inspected.structuredContent).toMatchObject({
+  expect(inspected).toMatchObject({
     normalized_result: expect.any(Object),
     operation: "inspect_web_page",
     predicate_type: expect.any(String),
@@ -340,17 +372,20 @@ it("does not attach to a target outside the request's allowed origin scope", asy
   const browser = await startFakeCdpBrowser();
   browsers.push(browser);
   const connected = await connectBrowser();
-  const result = await connected.client.callTool({
-    name: "inspect_web_page",
-    arguments: {
-      cdp_endpoint: browser.endpoint,
-      allowed_origins: ["https://unapproved.example.test"],
-      target_id: "allowed-page",
-      observation_ms: 0,
-    },
-  });
-  expect(result.isError).toBe(true);
-  expect(parseMcpToolError(result)).toMatchObject({
+  const input = {
+    cdp_endpoint: browser.endpoint,
+    allowed_origins: ["https://unapproved.example.test"],
+    target_id: "allowed-page",
+    observation_ms: 0,
+  };
+  await denyFixtureBrowser(connected, browser, "inspect_web_page", input);
+  const result = projectOwnedProducerError(
+    await inspectWebPage(
+      connected.provider,
+      toolContract("inspect_web_page").inputSchema.parse(input),
+    ),
+  );
+  expect(result).toMatchObject({
     error: {
       details: {
         operation: "inspect_web_page",
@@ -403,13 +438,13 @@ const connectBrowser = async () => {
     execute: () => Promise.resolve(observed(null)),
     close: () => Promise.resolve(resultOk(null)),
   }));
+  const provider = new CdpBrowserProvider();
   const server = createServer(
     { kind: "session", session },
     {
-      browserObservation: new CdpBrowserProvider(),
+      browserObservation: provider,
       availabilityPolicy: () => ({
         processCaptureEnabled: false,
-        investigationInputRoots: 0,
       }),
     },
   );
@@ -419,7 +454,7 @@ const connectBrowser = async () => {
   resources.push(client, server, session);
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  return { client, session };
+  return { client, session, provider };
 };
 
 const normalizedResultOf = (value: unknown): unknown => {
@@ -445,4 +480,69 @@ const artifactOf = (value: unknown): unknown => {
   )
     throw new TypeError("Missing screenshot artifact");
   return normalized.artifact;
+};
+
+const denyFixtureBrowser = async (
+  connected: Awaited<ReturnType<typeof connectBrowser>>,
+  browser: FakeCdpBrowser,
+  operation: string,
+  input: Readonly<Record<string, unknown>>,
+): Promise<void> => {
+  const commands = browser.commands.length;
+  await assertOwnedFixturePublicDenial(connected.client, operation, input);
+  expect(browser.commands).toHaveLength(commands);
+};
+
+const assertMalformedCaptureComparisons = async (
+  client: Client,
+  capture: unknown,
+): Promise<void> => {
+  const parsedCapture = webPageInspectionSchema.parse(capture);
+  const socket = parsedCapture.network.websocket_connections
+    .flatMap((connection) => connection.events)
+    .find((event) => event.payload_shape?.json_shape != null);
+  const payload = socket?.payload_shape;
+  if (socket === undefined || payload == null || payload.json_shape === null)
+    throw new Error("Missing deep WebSocket JSON shape fixture");
+  const malformedCapture = {
+    ...parsedCapture,
+    network: {
+      ...parsedCapture.network,
+      websocket_connections: parsedCapture.network.websocket_connections.map(
+        (connection) => ({
+          ...connection,
+          events: connection.events.map((event) =>
+            event === socket
+              ? {
+                  ...event,
+                  payload_shape: {
+                    ...payload,
+                    json_shape: {
+                      ...payload.json_shape,
+                      properties: [
+                        { path: "/event", types: [42], observations: 1 },
+                      ],
+                    },
+                  },
+                }
+              : event,
+          ),
+        }),
+      ),
+    },
+  };
+  const malformedComparison = await client.callTool({
+    name: "compare_web_captures",
+    arguments: {
+      before: { inspection: malformedCapture },
+      after: { inspection: capture },
+    },
+  });
+  expect(malformedComparison.isError).toBe(true);
+  expect(JSON.stringify(malformedComparison.content)).toContain("types");
+  const incompleteComparison = await client.callTool({
+    name: "compare_web_captures",
+    arguments: { before: { inspection: capture } },
+  });
+  expect(incompleteComparison.isError).toBe(true);
 };

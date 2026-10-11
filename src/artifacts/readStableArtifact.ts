@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
+import {
+  canonicalAdmissionPath,
+  isProtectedHostPath,
+} from "../filesystem/ProtectedPaths.js";
 
 /** Filesystem boundary for stable reads, including deterministic replacement probes. */
 export interface StableArtifactFileSystem {
@@ -44,8 +48,16 @@ export const readStableArtifact = async (
   fileSystem: StableArtifactFileSystem = FILE_SYSTEM,
 ): Promise<{ readonly bytes: Buffer; readonly sha256: string }> => {
   signal?.throwIfAborted();
+  if (
+    isProtectedHostPath(path) ||
+    isProtectedHostPath(await canonicalAdmissionPath(path))
+  )
+    throw new ArtifactReaderFailure(
+      "path",
+      "Protected artifact path rejected before ingestion.",
+    );
   const before = await fileSystem.lstat(path);
-  if (!before.isFile() || before.isSymbolicLink())
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n)
     throw new ArtifactReaderFailure(
       "path",
       `Expected a regular file without a symlink: ${path}`,
@@ -65,6 +77,7 @@ export const readStableArtifact = async (
     const initial = await file.stat({ bigint: true });
     if (
       !initial.isFile() ||
+      initial.nlink !== 1n ||
       initial.dev !== before.dev ||
       initial.ino !== before.ino
     )
@@ -102,6 +115,7 @@ export const readStableArtifact = async (
       [after, current].some(
         (stat) =>
           !stat.isFile() ||
+          stat.nlink !== 1n ||
           stat.dev !== initial.dev ||
           stat.ino !== initial.ino ||
           stat.size !== initial.size ||

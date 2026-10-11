@@ -1,3 +1,7 @@
+import {
+  canonicalAdmissionPath,
+  isProtectedHostPath,
+} from "../filesystem/ProtectedPaths.js";
 import type { BigIntStats } from "node:fs";
 import { constants } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
@@ -100,6 +104,16 @@ export const prepareRoot = async (
 > => {
   if (isAborted(signal)) return err(cancelled());
   try {
+    if (
+      isProtectedHostPath(root) ||
+      isProtectedHostPath(await canonicalAdmissionPath(root))
+    )
+      return err(
+        failure(
+          "invalid-root",
+          "Protected source root is outside investigation scope",
+        ),
+      );
     const metadata = await bigLstat(root);
     if (metadata.isSymbolicLink() || !metadata.isDirectory())
       return err(

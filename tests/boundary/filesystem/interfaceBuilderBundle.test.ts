@@ -22,6 +22,7 @@ import {
   invalidInterfaceBuilderEncodings,
 } from "../../fixtures/interfaceBuilderEncoding.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { runOwnedInterfaceBuilderCli } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const compile = promisify(execFile);
 
@@ -698,7 +699,7 @@ describe("NIB projection byte amplification", () => {
 
 cliTest(
   "compiled CLI preserves a good archive and reports repeated key and data omissions",
-  async ({ cli }) => {
+  async ({ processes }) => {
     const root = await createTestTempDirectory("rea-ib-cli-amplification-");
     const bundle = join(root, "Example.app");
     const contents = join(bundle, "Contents");
@@ -741,12 +742,16 @@ cliTest(
       }),
     );
 
-    const output = await cli.run({
-      arguments: ["decode-interface-builder", bundle, "--json"],
-      environment: {
-        REA_LOG_LEVEL: "silent",
-        REA_ANALYSIS_PROVIDER: "auto",
-      },
+    const output = await runOwnedInterfaceBuilderCli(processes, {
+      root: bundle,
+      directories: ["Contents", "Contents/MacOS", "Contents/Resources"],
+      files: [
+        "Contents/Info.plist",
+        "Contents/MacOS/App",
+        "Contents/Resources/A-Good.nib",
+        "Contents/Resources/B-RepeatedKey.nib",
+        "Contents/Resources/C-RepeatedData.nib",
+      ],
     });
 
     expect(output.exitCode, `${output.stderr}\n${output.stdout}`).toBe(0);
@@ -1104,14 +1109,16 @@ describe.skipIf(process.platform !== "darwin")(
 
     cliTest.for(interfaceBuilderEncodings)(
       "built CLI preserves native $0 graph and original bytes",
-      async (encoding, { cli }) => {
+      async (encoding, { processes }) => {
         const fixture = await createInterfaceBuilderEncodingFixture(encoding);
-        const output = await cli.run({
-          arguments: ["decode-interface-builder", fixture.app, "--json"],
-          environment: {
-            REA_LOG_LEVEL: "silent",
-            REA_ANALYSIS_PROVIDER: "auto",
-          },
+        const output = await runOwnedInterfaceBuilderCli(processes, {
+          root: fixture.app,
+          directories: ["Contents", "Contents/MacOS", "Contents/Resources"],
+          files: [
+            "Contents/Info.plist",
+            "Contents/MacOS/App",
+            "Contents/Resources/Panel.nib",
+          ],
         });
         expect(output.exitCode).toBe(0);
         const result = interfaceBuilderAnalysisSchema.parse(
@@ -1140,14 +1147,16 @@ describe.skipIf(process.platform !== "darwin")(
 
     cliTest.for(invalidInterfaceBuilderEncodings)(
       "built CLI reports $0 as invalid archive bytes",
-      async (encoding, { cli }) => {
+      async (encoding, { processes }) => {
         const fixture = await createInterfaceBuilderEncodingFixture(encoding);
-        const output = await cli.run({
-          arguments: ["decode-interface-builder", fixture.app, "--json"],
-          environment: {
-            REA_LOG_LEVEL: "silent",
-            REA_ANALYSIS_PROVIDER: "auto",
-          },
+        const output = await runOwnedInterfaceBuilderCli(processes, {
+          root: fixture.app,
+          directories: ["Contents", "Contents/MacOS", "Contents/Resources"],
+          files: [
+            "Contents/Info.plist",
+            "Contents/MacOS/App",
+            "Contents/Resources/Panel.nib",
+          ],
         });
         expect(output.exitCode).toBe(0);
         const result = interfaceBuilderAnalysisSchema.parse(

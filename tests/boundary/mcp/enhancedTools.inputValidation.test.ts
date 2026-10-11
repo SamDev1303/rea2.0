@@ -8,7 +8,9 @@ afterEach(closeEnhancedToolResources);
 
 describe("enhanced MCP input validation", () => {
   it("lets the SDK reject misspelled tool inputs", async () => {
-    const client = await connect({ execute: () => Promise.resolve(ok([])) });
+    const client = await connect({ execute: () => Promise.resolve(ok([])) }, [
+      { name: "trace_feature", arguments: { query: "needle" } },
+    ]);
     const valid = await client.callTool({
       name: "trace_feature",
       arguments: { query: "needle" },
@@ -32,9 +34,12 @@ describe("enhanced MCP input validation", () => {
   });
 
   it("returns a typed tool error for malformed Hopper boundary values", async () => {
-    const client = await connect({
-      execute: () => Promise.resolve(ok(["not", "a", "procedure", "map"])),
-    });
+    const client = await connect(
+      {
+        execute: () => Promise.resolve(ok(["not", "a", "procedure", "map"])),
+      },
+      [{ name: "analyze_swift_types", arguments: {} }],
+    );
     const result = await client.callTool({
       name: "analyze_swift_types",
       arguments: {},

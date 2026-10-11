@@ -1,3 +1,4 @@
+import type { BinarySession } from "../../../src/application/binary/BinarySession.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { ok as resultOk } from "../../../src/domain/result.js";
 import { readFile, writeFile } from "node:fs/promises";
@@ -143,7 +144,6 @@ describe("server and catalog identity", () => {
   it("reports composed, host, and target-specific availability truthfully", () => {
     const policy = {
       processCaptureEnabled: true,
-      investigationInputRoots: 1,
     };
     const composed = buildCapabilityInventory(
       {
@@ -204,7 +204,7 @@ describe("server and catalog identity", () => {
 });
 
 describe("live server identity over MCP", () => {
-  it("exposes live identity, a stable catalog, and changing availability", async () => {
+  it("exposes live identity and a stable catalog while preserving public host restrictions", async () => {
     const session = createTestBinarySession(availabilityProvider());
     const server = createServer({ kind: "session", session });
     const client = new Client(
@@ -226,13 +226,55 @@ describe("live server identity over MCP", () => {
       await client.connect(clientTransport);
       await assertLiveIdentity(client);
       await assertSessionIdentity(client);
+      expect(rawInventory(session)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "current_address",
+            available: false,
+            reason: "target_required",
+          }),
+          expect.objectContaining({
+            name: "capture_process_scenario",
+            available: process.platform !== "win32",
+            reason:
+              process.platform === "win32" ? "unsupported_host" : "available",
+            client_requirements: {
+              required: [],
+              optional: [],
+              missing_required: [],
+              missing_optional: [],
+            },
+          }),
+          expect.objectContaining({
+            name: "inspect_web_page",
+            available: false,
+            reason: "provider_missing",
+          }),
+          expect.objectContaining({
+            name: "analyze_javascript_application",
+            available: true,
+            reason: "available",
+            remediation: null,
+          }),
+        ]),
+      );
       expect(
         (await client.listTools()).tools.map(({ name }) => name),
       ).toContain("current_address");
-      await client.callTool({
-        name: "open_binary",
-        arguments: { path: process.execPath },
-      });
+      const root = await createTestTempDirectory("rea-live-identity-owned-");
+      const target = join(root, "owned-tool");
+      await writeFile(target, machoImage({}));
+      await assertPublicOpeningDenied(client, target);
+      expect(session.activeTarget()).toBeUndefined();
+      expect((await session.open(target)).ok).toBe(true);
+      expect(rawInventory(session)).toContainEqual(
+        expect.objectContaining({
+          name: "current_address",
+          available: true,
+          reason: "available",
+        }),
+      );
+      await assertSessionIdentity(client);
       expect(toolListChanges).toBe(0);
       expect(
         (await client.listTools()).tools.map(({ name }) => name),
@@ -247,8 +289,8 @@ describe("live server identity over MCP", () => {
   }, 10_000);
 });
 
-describe("active-target availability over MCP", () => {
-  it("advertises active-target tools only when a matching target is open", async () => {
+describe("raw owned-target availability and protected MCP projection", () => {
+  it("preserves provider target requirements while MCP consistently reports unsupported host", async () => {
     const session = createTestBinarySession(
       availabilityProvider(["inspect_macho", "inspect_artifact"]),
     );
@@ -265,35 +307,47 @@ describe("active-target availability over MCP", () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const listed = await toolNames(client);
-      expect(await activeTargetReasons(client)).toEqual({
+      expect(rawTargetReasons(session)).toEqual({
         inspect_macho: "target_required",
         inspect_artifact: "target_required",
         inspect_managed_artifact: "available",
       });
+      await assertPublicTargetReasons(client);
       const call = await client.callTool({
         name: "inspect_macho",
         arguments: {},
       });
       expect(parseMcpToolError(call)).toMatchObject({
-        error: { code: "target_unavailable" },
+        error: {
+          code: "capability_unavailable",
+          details: {
+            provider_id: "rea2-protected-host",
+            operation: "inspect_macho",
+          },
+        },
       });
-      await openTarget(client, plist);
-      expect(await activeTargetReasons(client)).toEqual({
+      await assertPublicOpeningDenied(client, plist);
+      expect(session.activeTarget()).toBeUndefined();
+      expect((await session.open(plist)).ok).toBe(true);
+      await assertPublicTargetReasons(client);
+      expect(rawTargetReasons(session)).toEqual({
         inspect_macho: "target_unsupported",
         inspect_artifact: "available",
         inspect_managed_artifact: "available",
       });
       await client.callTool({ name: "close_binary", arguments: {} });
-      await openTarget(client, executable);
-      expect(await activeTargetReasons(client)).toEqual({
+      await assertPublicOpeningDenied(client, executable);
+      expect(session.activeTarget()).toBeUndefined();
+      expect((await session.open(executable)).ok).toBe(true);
+      await assertPublicTargetReasons(client);
+      expect(rawTargetReasons(session)).toEqual({
         inspect_macho: "available",
         inspect_artifact: "available",
         inspect_managed_artifact: "available",
       });
       await client.callTool({ name: "close_binary", arguments: {} });
-      expect((await activeTargetReasons(client)).inspect_macho).toBe(
-        "target_required",
-      );
+      expect(rawTargetReasons(session).inspect_macho).toBe("target_required");
+      await assertPublicTargetReasons(client);
       expect(await toolNames(client)).toEqual(listed);
     } finally {
       await Promise.allSettled([
@@ -311,12 +365,21 @@ const PLIST_XML =
 const toolNames = async (client: Client): Promise<string[]> =>
   (await client.listTools()).tools.map(({ name }) => name);
 
-const openTarget = async (client: Client, path: string): Promise<void> => {
+const assertPublicOpeningDenied = async (
+  client: Client,
+  path: string,
+): Promise<void> => {
   const opened = await client.callTool({
     name: "open_binary",
     arguments: { path },
   });
-  expect(opened.isError ?? false).toBe(false);
+  expect(opened.isError).toBe(true);
+  expect(parseMcpToolError(opened)).toMatchObject({
+    error: {
+      code: "capability_unavailable",
+      details: { provider_id: "rea2-protected-host", operation: "open_binary" },
+    },
+  });
 };
 
 const activeTargetReasons = async (
@@ -385,13 +448,12 @@ const assertSessionIdentity = async (client: Client): Promise<void> => {
         expect.objectContaining({
           name: "current_address",
           available: false,
-          reason: "target_required",
+          reason: "unsupported_host",
         }),
         expect.objectContaining({
           name: "capture_process_scenario",
-          available: process.platform !== "win32",
-          reason:
-            process.platform === "win32" ? "unsupported_host" : "available",
+          available: false,
+          reason: "unsupported_host",
           client_requirements: {
             required: [],
             optional: [],
@@ -402,7 +464,7 @@ const assertSessionIdentity = async (client: Client): Promise<void> => {
         expect.objectContaining({
           name: "inspect_web_page",
           available: false,
-          reason: "provider_missing",
+          reason: "unsupported_host",
         }),
         expect.objectContaining({
           name: "analyze_javascript_application",
@@ -418,5 +480,27 @@ const assertSessionIdentity = async (client: Client): Promise<void> => {
         sampling: false,
       },
     },
+  });
+};
+
+const rawInventory = (session: BinarySession) =>
+  buildCapabilityInventory(session.status(), {
+    processCaptureEnabled: process.platform !== "win32",
+  });
+
+const rawTargetReasons = (session: BinarySession): Record<string, unknown> => {
+  const inventory = rawInventory(session);
+  return Object.fromEntries(
+    ["inspect_macho", "inspect_artifact", "inspect_managed_artifact"].map(
+      (name) => [name, inventory.find((tool) => tool.name === name)?.reason],
+    ),
+  );
+};
+
+const assertPublicTargetReasons = async (client: Client): Promise<void> => {
+  expect(await activeTargetReasons(client)).toEqual({
+    inspect_macho: "unsupported_host",
+    inspect_artifact: "unsupported_host",
+    inspect_managed_artifact: "unsupported_host",
   });
 };

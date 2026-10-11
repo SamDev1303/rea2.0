@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import type { ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { expect, onTestFinished } from "vitest";
 
+import { projectProcessCliError } from "../../../src/application/process/ProcessCli.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { partialProcessCaptureObservationSchema } from "../../../src/domain/process/processCapture.js";
@@ -14,15 +14,18 @@ import {
   type ProcessCapture,
 } from "../../../src/domain/process/processCaptureParsing.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
-import { runCliJson } from "../../fixtures/cliJsonProcess.js";
-import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
+import {
+  prepareOwnedProcessController,
+  captureOwnedProcessCli,
+  connectOwnedProcessReadback,
+  spawnOwnedProcessCli,
+  settleOwnedProcessCliReceiver,
+} from "../../support/process/ownedProcessController.js";
+import type { OwnedProcessSelection } from "../../support/process/ownedProcessTemplates.mjs";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { itWithCaptureCapability as captureTest } from "../../boundary/process/processCaptureCapability.js";
 import { expectSerializedUnverifiedHostCleanup } from "../../support/hostCleanup.js";
-
-const finalizationFixture = fileURLToPath(
-  new URL("../../fixtures/processFinalization.mjs", import.meta.url),
-);
+import { processTimingDiagnostics } from "../../support/process/processTimingDiagnostics.js";
 
 type CaptureScenario = Record<string, unknown>;
 type CaptureOutcome =
@@ -33,33 +36,47 @@ const captureScenario = (
   mode: "cooperative" | "ignoring" | "descendant",
   root: string,
   additions: CaptureScenario = {},
-  finalExitCode?: number,
-): CaptureScenario => ({
-  executable: process.execPath,
-  arguments: [
-    finalizationFixture,
-    mode,
+  finalExitCode?: 0 | 3,
+): OwnedProcessSelection => {
+  const variants = [
+    ["standard", { timeout_ms: 1500, finalization_ms: 1500 }],
+    [
+      "descendant",
+      {
+        timeout_ms: 1500,
+        finalization_ms: 1500,
+        settle_ms: 100,
+        limits: { file_bytes: 1 },
+      },
+    ],
+    ["default", { timeout_ms: 500 }],
+    ["cancel", { timeout_ms: 300, finalization_ms: 20000 }],
+    [
+      "invalid-budget",
+      { timeout_ms: Number.MAX_SAFE_INTEGER, finalization_ms: 1, settle_ms: 0 },
+    ],
+  ] as const;
+  const match = variants.find(
+    ([, value]) => JSON.stringify(value) === JSON.stringify(additions),
+  );
+  if (match === undefined)
+    throw new Error("Unknown authored finalization variant");
+  return {
+    template: "finalization",
     root,
-    ...(finalExitCode === undefined ? [] : [String(finalExitCode)]),
-  ],
-  working_directory: root,
-  filesystem_observation_paths: [root],
-  idle_timeout_ms: 10_000,
-  ...additions,
-});
+    mode,
+    timing: match[0],
+    ...(finalExitCode === undefined ? {} : { exitCode: finalExitCode }),
+  };
+};
 
 const captureViaCli = async (
-  root: string,
-  scenario: CaptureScenario,
+  _root: string,
+  scenario: OwnedProcessSelection,
 ): Promise<CaptureOutcome> => {
-  const scenarioPath = join(root, "scenario.json");
-  await writeFile(scenarioPath, JSON.stringify(scenario));
-  const document = await runCliJson([
-    "capture-process",
-    scenarioPath,
-    "--format",
-    "json",
-  ]);
+  const controller = await prepareOwnedProcessController(scenario);
+  onTestFinished(controller.dispose);
+  const document = await captureOwnedProcessCli(controller);
   if (
     typeof document === "object" &&
     document !== null &&
@@ -81,10 +98,13 @@ const captureViaCli = async (
 };
 
 const captureViaMcp = async (
-  scenario: CaptureScenario,
+  scenario: OwnedProcessSelection,
 ): Promise<CaptureOutcome> => {
-  const { call } = await connectLocalToolsMcp();
-  const response = await call("capture_process_scenario", scenario);
+  const controller = await prepareOwnedProcessController(scenario);
+  onTestFinished(controller.dispose);
+  const readback = await connectOwnedProcessReadback();
+  onTestFinished(readback.close);
+  const response = await readback.captureResponse(controller);
   if (response.isError === true) {
     const parsed = parseMcpToolError(response);
     if (parsed.error.code === "cleanup_incomplete")
@@ -134,18 +154,70 @@ const fixturePid = async (root: string): Promise<number> => {
   return pid;
 };
 
-const waitForFinalization = async (root: string): Promise<number> => {
-  // The fixture writes the PID before it can receive SIGTERM, so once the
-  // marker exists the PID file is complete.
-  await waitFor("the finalization fixture to receive SIGTERM", async () => {
-    try {
-      await access(join(root, "sigterm-received"));
-      return true;
-    } catch {
-      return false;
+const waitForObservedFinalization = async (
+  root: string,
+  stage: string,
+  diagnostics: ReturnType<typeof processTimingDiagnostics>,
+) => {
+  let observedPid = false;
+  diagnostics.mark(`${stage}_finalization_wait_started`);
+  try {
+    await waitFor("the finalization fixture to receive SIGTERM", async () => {
+      if (!observedPid) {
+        try {
+          const pid = Number.parseInt(
+            await readFile(join(root, "pid.txt"), "utf8"),
+            10,
+          );
+          if (Number.isSafeInteger(pid) && pid > 0) {
+            observedPid = true;
+            diagnostics.mark(`${stage}_target_pid_observed`, { pid });
+          }
+        } catch {
+          // This authored marker is absent until the owned target starts.
+        }
+      }
+      try {
+        await access(join(root, "sigterm-received"));
+        diagnostics.mark(`${stage}_sigterm_marker_observed`);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    return await fixturePid(root);
+  } catch (cause) {
+    diagnostics.mark(`${stage}_finalization_wait_failed`, {
+      target_pid_observed: observedPid,
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+    throw cause;
+  }
+};
+
+const abortProducerOnTeardown = (
+  controller: AbortController,
+  diagnostics: ReturnType<typeof processTimingDiagnostics>,
+  producer: Promise<unknown>,
+) => {
+  onTestFinished(async () => {
+    if (!controller.signal.aborted) {
+      diagnostics.mark("producer_teardown_abort_requested");
+      controller.abort(new Error("finalization fixture test teardown"));
     }
+    // Observe settlement without replacing the original promise or rejection.
+    await Promise.allSettled([producer]);
+    diagnostics.mark("producer_teardown_settled");
   });
-  return fixturePid(root);
+};
+
+const interruptReceiver = (
+  receiver: ChildProcess,
+  diagnostics: ReturnType<typeof processTimingDiagnostics>,
+) => {
+  diagnostics.mark("cli_sigint_requested", { pid: receiver.pid ?? null });
+  const sent = receiver.kill("SIGINT");
+  diagnostics.mark("cli_sigint_sent", { sent });
 };
 
 const waitForProcessExit = async (pid: number): Promise<void> =>
@@ -418,21 +490,19 @@ captureTest.each(["CLI", "MCP"] as const)(
       settle_ms: 0,
     });
     if (adapter === "CLI") {
-      const scenarioPath = join(root, "scenario.json");
-      await writeFile(scenarioPath, JSON.stringify(scenario));
-      const response = await runCliJson([
-        "capture-process",
-        scenarioPath,
-        "--format",
-        "json",
-      ]);
+      const controller = await prepareOwnedProcessController(scenario);
+      onTestFinished(controller.dispose);
+      const response = await captureOwnedProcessCli(controller);
       expect(
         JSON.stringify(response),
         "CLI rejects the combined budget",
       ).toContain("timeout_ms + finalization_ms + settle_ms");
     } else {
-      const { call } = await connectLocalToolsMcp();
-      const response = await call("capture_process_scenario", scenario);
+      const controller = await prepareOwnedProcessController(scenario);
+      onTestFinished(controller.dispose);
+      const readback = await connectOwnedProcessReadback();
+      onTestFinished(readback.close);
+      const response = await readback.captureResponse(controller);
       expect(response.isError, "MCP rejects the combined budget").toBe(true);
       expect(
         JSON.stringify(response),
@@ -449,64 +519,66 @@ captureTest.each(["CLI", "MCP"] as const)(
 captureTest(
   "cancels the compiled CLI and MCP workflows during finalization without waiting for grace",
   async () => {
+    const diagnostics = processTimingDiagnostics("F182");
+    onTestFinished(() => diagnostics.persist());
     const cliRoot = await createTestTempDirectory(
       "rea-finalization-cli-cancel-",
     );
-    const cliScenarioPath = join(cliRoot, "scenario.json");
-    await writeFile(
-      cliScenarioPath,
-      JSON.stringify(
-        captureScenario("ignoring", cliRoot, {
-          timeout_ms: 300,
-          finalization_ms: 20_000,
-        }),
-      ),
+    const cliController = await prepareOwnedProcessController(
+      captureScenario("ignoring", cliRoot, {
+        timeout_ms: 300,
+        finalization_ms: 20000,
+      }),
     );
-    const cli = spawn(
-      process.execPath,
-      [
-        "scripts/rea.mjs",
-        "capture-process",
-        cliScenarioPath,
-        "--format",
-        "json",
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+    onTestFinished(
+      diagnostics.cleanup("cli_controller", cliController.dispose),
     );
     let stdout = "";
-    cli.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
+    let cliClosed!: Promise<{ readonly code: number | null }>;
+    const cli = await spawnOwnedProcessCli(cliController, (receiver) => {
+      diagnostics.mark("cli_receiver_spawned", { pid: receiver.pid ?? null });
+      receiver.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      diagnostics.observeChild(receiver);
+      cliClosed = new Promise((resolve, reject) => {
+        receiver.once("error", reject);
+        receiver.once("close", (code) => resolve({ code }));
+      });
+      diagnostics.observeSettlement("cli_closed_promise", cliClosed);
     });
-    cli.stderr.resume();
-    const cliClosed = new Promise<{ readonly code: number | null }>(
-      (resolve, reject) => {
-        cli.once("error", reject);
-        cli.once("close", (code) => resolve({ code }));
-      },
+    // The pre-dispatch observer keeps the original rejection for both later awaits.
+    onTestFinished(
+      diagnostics.cleanup("cli_receiver", async () => {
+        await settleOwnedProcessCliReceiver(cliController, cliClosed);
+      }),
     );
-    onTestFinished(async () => {
-      if (cli.exitCode === null && cli.signalCode === null) cli.kill("SIGKILL");
-      await cliClosed;
-    });
-    const cliFixturePid = await waitForFinalization(cliRoot);
+    const cliFixturePid = await waitForObservedFinalization(
+      cliRoot,
+      "cli",
+      diagnostics,
+    );
     const cliStarted = Date.now();
-    cli.kill("SIGINT");
+    interruptReceiver(cli, diagnostics);
     const cliExit = await cliClosed;
     await waitForProcessExit(cliFixturePid);
-    expect(cliExit.code, "SIGINT produces the CLI cancellation status").toBe(
-      130,
-    );
+    diagnostics.mark("cli_target_exit_observed", { pid: cliFixturePid });
     expect(
       Date.now() - cliStarted,
       "CLI cancellation does not wait for the grace interval",
     ).toBeLessThan(8_000);
     const cliDocument: unknown = JSON.parse(stdout);
+    diagnostics.outcome("cli_outcome_parsed", cliDocument);
     if (
       typeof cliDocument === "object" &&
       cliDocument !== null &&
       "code" in cliDocument &&
       cliDocument.code === "cleanup_incomplete"
     ) {
+      expect(
+        cliExit.code,
+        "incomplete cleanup reports failure despite cancellation",
+      ).toBe(1);
       const partial = expectSerializedUnverifiedHostCleanup({
         error: cliDocument,
       });
@@ -517,6 +589,7 @@ captureTest(
         signals: [{ signal: "SIGTERM" }, { signal: "SIGKILL" }],
       });
     } else {
+      expect(cliExit.code, "clean cancellation retains status130").toBe(130);
       expect(cliDocument, "CLI returns a typed cancelled result").toMatchObject(
         {
           code: "cancelled",
@@ -527,30 +600,68 @@ captureTest(
     const mcpRoot = await createTestTempDirectory(
       "rea-finalization-mcp-cancel-",
     );
-    const { client } = await connectLocalToolsMcp();
-    const controller = new AbortController();
-    const call = client.callTool(
-      {
-        name: "capture_process_scenario",
-        arguments: captureScenario("ignoring", mcpRoot, {
-          timeout_ms: 300,
-          finalization_ms: 20_000,
-        }),
-      },
-      { signal: controller.signal },
+    const readback = await connectOwnedProcessReadback();
+    onTestFinished(diagnostics.cleanup("producer_readback", readback.close));
+    const mcpController = await prepareOwnedProcessController(
+      captureScenario("ignoring", mcpRoot, {
+        timeout_ms: 300,
+        finalization_ms: 20000,
+      }),
     );
-    const mcpFixturePid = await waitForFinalization(mcpRoot);
+    onTestFinished(
+      diagnostics.cleanup("producer_controller", mcpController.dispose),
+    );
+    const controller = new AbortController();
+    diagnostics.mark("producer_capture_started");
+    const call = readback.capture(mcpController, controller.signal);
+    abortProducerOnTeardown(controller, diagnostics, call);
+    diagnostics.observeProducer(call);
+    const mcpFixturePid = await waitForObservedFinalization(
+      mcpRoot,
+      "producer",
+      diagnostics,
+    );
     const mcpStarted = Date.now();
+    diagnostics.mark("producer_abort_requested");
     controller.abort(new Error("cancel finalization acceptance fixture"));
-    await expect(
-      call,
-      "MCP cancellation rejects the pending SDK request",
-    ).rejects.toThrow("cancel finalization acceptance fixture");
+    const mcpFailure = await call.then(
+      () => {
+        throw new Error("Cancellation unexpectedly completed");
+      },
+      (cause: unknown) => cause,
+    );
+    expect(
+      mcpFailure,
+      "Owned capture cancellation rejects the pending producer request",
+    ).toBeInstanceOf(Error);
+    const mcpProjected = projectProcessCliError(mcpFailure);
+    diagnostics.mark("producer_outcome_projected", {
+      json: JSON.stringify(mcpProjected),
+    });
+    if ("code" in mcpProjected && mcpProjected.code === "cleanup_incomplete") {
+      const partial = expectSerializedUnverifiedHostCleanup({
+        error: mcpProjected,
+      });
+      expect(
+        finalizationFromPartial(partial),
+        "MCP retains finalization evidence when cancellation cleanup is unverified",
+      ).toMatchObject({
+        signals: [{ signal: "SIGTERM" }, { signal: "SIGKILL" }],
+      });
+    } else {
+      expect(mcpFailure).toMatchObject({
+        message: "cancel finalization acceptance fixture",
+        reason: "cancelled",
+      });
+      expect(mcpProjected).toMatchObject({ code: "cancelled" });
+    }
     await waitForProcessExit(mcpFixturePid);
+    diagnostics.mark("producer_target_exit_observed", { pid: mcpFixturePid });
     await expect(
-      client.listTools(),
+      readback.client.listTools(),
       "the server accepts a follow-up request after cancelling the capture",
     ).resolves.toMatchObject({ tools: expect.any(Array) });
+    diagnostics.mark("mcp_followup_list_tools_passed");
     expect(
       Date.now() - mcpStarted,
       "MCP cancellation does not wait for the grace interval",

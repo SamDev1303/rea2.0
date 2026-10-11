@@ -1,3 +1,4 @@
+import { isProtectedReferencePath } from "../filesystem/ProtectedPaths.js";
 import { compareUnicodeCodePoints } from "../domain/unicodeCodePointOrder.js";
 import { err, ok } from "../domain/result.js";
 import { ArtifactReaderFailure } from "../artifacts/ArtifactReader.js";
@@ -57,9 +58,12 @@ const readSource = async (
     root: canonicalRoot,
     rootIdentity,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
-    ...(options.shouldExclude === undefined
-      ? {}
-      : { shouldExclude: options.shouldExclude }),
+    shouldExclude: (path, kind) => {
+      const requested = options.shouldExclude?.(path, kind) ?? false;
+      return isProtectedReferencePath(path) || requested;
+    },
+    visitedEntries: 0,
+    deadline: performance.now() + 30000,
     entries: [],
     pending: [{ path: canonicalRoot }],
     bytesRead: 0,

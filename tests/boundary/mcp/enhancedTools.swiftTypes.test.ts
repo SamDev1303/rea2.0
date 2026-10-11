@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { EnhancedTools } from "../../../src/application/EnhancedTools.js";
+import type { AnalysisOperationPort } from "../../../src/application/AnalysisProvider.js";
 import {
   AnalysisArtifactChangedError,
   AnalysisCapabilityUnavailableError,
@@ -16,6 +17,15 @@ import {
 
 afterEach(closeEnhancedToolResources);
 
+const swiftInventoryPort = (): AnalysisOperationPort => ({
+  execute: async (operation) =>
+    ok(
+      operation === "list_procedures"
+        ? GHIDRA_SWIFT_INVENTORY.procedures
+        : GHIDRA_SWIFT_INVENTORY.symbols,
+    ),
+});
+
 describe("Swift classification through MCP", () => {
   it.each([
     { arguments: {}, total: 6 },
@@ -23,14 +33,9 @@ describe("Swift classification through MCP", () => {
     { arguments: { category: "structs", pattern: "Pair" }, total: 3 },
     { arguments: { pattern: "_$s4main4PairVMa" }, total: 1 },
   ])("classifies golden Ghidra observations with $arguments", async (test) => {
-    const client = await connect({
-      execute: async (operation) =>
-        ok(
-          operation === "list_procedures"
-            ? GHIDRA_SWIFT_INVENTORY.procedures
-            : GHIDRA_SWIFT_INVENTORY.symbols,
-        ),
-    });
+    const client = await connect(swiftInventoryPort(), [
+      { name: "analyze_swift_types", arguments: test.arguments },
+    ]);
     const result = await client.callTool({
       name: "analyze_swift_types",
       arguments: test.arguments,
@@ -62,14 +67,12 @@ describe("Swift classification through MCP", () => {
   });
 
   it("keeps provider names and supporting aliases inline", async () => {
-    const client = await connect({
-      execute: async (operation) =>
-        ok(
-          operation === "list_procedures"
-            ? GHIDRA_SWIFT_INVENTORY.procedures
-            : GHIDRA_SWIFT_INVENTORY.symbols,
-        ),
-    });
+    const client = await connect(swiftInventoryPort(), [
+      {
+        name: "analyze_swift_types",
+        arguments: { category: "structs", pattern: "typeMetadataAccessor" },
+      },
+    ]);
     expect(
       jsonResult(
         await client.callTool({
@@ -100,18 +103,21 @@ describe("Swift classification through MCP", () => {
   });
 
   it("retains known facts when a provider has no symbol inventory", async () => {
-    const client = await connect({
-      execute: async (operation) =>
-        operation === "list_procedures"
-          ? ok([{ address: "0x1", value: "$s4main4PairVMa" }])
-          : err(
-              new AnalysisCapabilityUnavailableError(
-                "fixture",
-                operation,
-                "no symbols",
+    const client = await connect(
+      {
+        execute: async (operation) =>
+          operation === "list_procedures"
+            ? ok([{ address: "0x1", value: "$s4main4PairVMa" }])
+            : err(
+                new AnalysisCapabilityUnavailableError(
+                  "fixture",
+                  operation,
+                  "no symbols",
+                ),
               ),
-            ),
-    });
+      },
+      [{ name: "analyze_swift_types", arguments: { category: "structs" } }],
+    );
     const result = await client.callTool({
       name: "analyze_swift_types",
       arguments: { category: "structs" },

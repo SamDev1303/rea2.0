@@ -1,4 +1,11 @@
 import { expect, it } from "vitest";
+import { join } from "node:path";
+import { lstat } from "node:fs/promises";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { registerApktoolCommands } from "../../../src/cli/apktoolCommands.js";
+import { ApktoolProvider } from "../../../src/apktool/ApktoolProvider.js";
+import { silentLogger } from "../../../src/logger.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
 
 import { serveCli as serve } from "./cliServeHarness.js";
 
@@ -17,7 +24,29 @@ it("reports a missing apktool launcher with recovery guidance", async () => {
     REA_APKTOOL_COMMAND: "/nonexistent/apktool",
   });
   expect(result.stdout).toContain("capability_unavailable");
-  expect(result.stdout).toContain("REA_APKTOOL_COMMAND");
+  const missing = join(
+    await createTestTempDirectory("rea-apktool-missing-"),
+    "absent-apktool",
+  );
+  await expect(lstat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+  const provider = new ApktoolProvider({
+    environment: { REA_APKTOOL_COMMAND: missing },
+  });
+  try {
+    const parsed = await serveRegisteredCliFixture(
+      (cli) => {
+        registerApktoolCommands(cli, silentLogger, {}, provider);
+      },
+      ["inspect-apktool-client", "--json"],
+    );
+    expect(parsed.exitCode).toBe(1);
+    expect(parsed.stdout).toContain("capability_unavailable");
+    expect(parsed.stdout).toContain("REA_APKTOOL_COMMAND");
+    expect(parsed.stdout).toContain(missing);
+  } finally {
+    await provider.close();
+  }
+  await expect(lstat(missing)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("validates the locale option before launching apktool", async () => {

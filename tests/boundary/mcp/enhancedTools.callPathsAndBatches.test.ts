@@ -31,7 +31,9 @@ describe("enhanced MCP tools", () => {
         return ok(`pseudo for ${String(arguments_.procedure)}`);
       },
     };
-    const client = await connect(analysis);
+    const client = await connect(analysis, [
+      { name: "batch_decompile", arguments: { addresses } },
+    ]);
     const result = await client.callTool({
       name: "batch_decompile",
       arguments: {
@@ -119,34 +121,6 @@ describe("enhanced MCP tools", () => {
 
 describe("batch procedure identity", () => {
   it("keeps selectors separate from canonical entries and preserves partial identity failures", async () => {
-    const client = await connect({
-      execute: async (operation, input) => {
-        if (operation === "procedure_address") {
-          if (input.procedure === "unknown")
-            return err(
-              new AnalysisCapabilityUnavailableError(
-                "fixture",
-                operation,
-                "identity unavailable",
-              ),
-            );
-          if (input.procedure === "malformed") return ok({ address: "0x1000" });
-          return ok(
-            input.procedure === "external" ? "EXTERNAL:00000001" : "0x1000",
-          );
-        }
-        if (operation === "address_name") {
-          return input.address === "EXTERNAL:00000001"
-            ? err(new AnalysisOutputError(operation, "label lookup failed"))
-            : ok("observed_name");
-        }
-        return input.procedure === "missing"
-          ? err(new AnalysisOutputError(operation, "no containing procedure"))
-          : ok(
-              `pseudocode label is deliberately unrelated: ${String(input.procedure)}`,
-            );
-      },
-    });
     const selectors = [
       "0x1000",
       "0x1004",
@@ -155,6 +129,38 @@ describe("batch procedure identity", () => {
       "unknown",
       "malformed",
     ];
+    const client = await connect(
+      {
+        execute: async (operation, input) => {
+          if (operation === "procedure_address") {
+            if (input.procedure === "unknown")
+              return err(
+                new AnalysisCapabilityUnavailableError(
+                  "fixture",
+                  operation,
+                  "identity unavailable",
+                ),
+              );
+            if (input.procedure === "malformed")
+              return ok({ address: "0x1000" });
+            return ok(
+              input.procedure === "external" ? "EXTERNAL:00000001" : "0x1000",
+            );
+          }
+          if (operation === "address_name") {
+            return input.address === "EXTERNAL:00000001"
+              ? err(new AnalysisOutputError(operation, "label lookup failed"))
+              : ok("observed_name");
+          }
+          return input.procedure === "missing"
+            ? err(new AnalysisOutputError(operation, "no containing procedure"))
+            : ok(
+                `pseudocode label is deliberately unrelated: ${String(input.procedure)}`,
+              );
+        },
+      },
+      [{ name: "batch_decompile", arguments: { addresses: selectors } }],
+    );
     const result = await client.callTool({
       name: "batch_decompile",
       arguments: { addresses: selectors },

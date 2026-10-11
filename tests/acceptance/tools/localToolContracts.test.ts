@@ -3,7 +3,7 @@ import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -11,6 +11,11 @@ import { itWithCaptureCapability as captureTest } from "../../boundary/process/p
 import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { captureProcessScenarioFile } from "../../../src/application/process/ProcessCli.js";
+import {
+  prepareOwnedProcessController,
+  connectOwnedProcessReadback,
+} from "../../support/process/ownedProcessController.js";
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL("../../../scripts/rea.mjs", import.meta.url));
@@ -172,12 +177,16 @@ captureTest(
         ).toBe(true);
         const path = join(root, `scenario-${String(index)}.json`);
         await writeFile(path, JSON.stringify(request));
+        expect(
+          JSON.stringify(await captureProcessScenarioFile(path, {})),
+          JSON.stringify(options),
+        ).toContain("invalid_request");
         await expect(
           execute(process.execPath, [cli, "capture-process", path, "--json"]),
           JSON.stringify(options),
         ).rejects.toMatchObject({
           code: 1,
-          stdout: expect.stringContaining("invalid_request"),
+          stdout: expect.stringContaining("capability_unavailable"),
         });
       }),
     );
@@ -187,12 +196,17 @@ captureTest(
       executable: missing,
     });
     expect(parseMcpToolError(failed)).toMatchObject({
-      error: {
+      error: { code: "capability_unavailable" },
+    });
+    const missingScenario = join(root, "scenario.json");
+    await writeFile(missingScenario, JSON.stringify({ executable: missing }));
+    expect(await captureProcessScenarioFile(missingScenario, {})).toMatchObject(
+      {
         code: "process_capture_failed",
         message: expect.stringContaining(missing),
         details: { execution_failure: expect.stringContaining(missing) },
       },
-    });
+    );
     await writeFile(
       join(root, "scenario.json"),
       JSON.stringify({ executable: missing }),
@@ -206,7 +220,7 @@ captureTest(
       ]),
     ).rejects.toMatchObject({
       code: 1,
-      stdout: expect.stringContaining(missing),
+      stdout: expect.stringContaining("capability_unavailable"),
     });
   },
   60_000,
@@ -216,23 +230,16 @@ captureTest.each(["untruncated", "truncated"] as const)(
   "captures real process choices and composes a %s self-comparison",
   async (captureState) => {
     const root = await createTestTempDirectory("rea-local-capture-");
-    const { call } = await connectLocalToolsMcp();
-    const captured = await call("capture_process_scenario", {
-      executable: process.execPath,
-      arguments: [
-        "-e",
-        `require('node:fs').writeFileSync('state','selected');console.log(process.env['app.setting'],process.env.MY_PASSWORD,process.env['REA_PROCESS_RUN_ID'+String.fromCharCode(10)]);${captureState === "truncated" ? "console.log('x'.repeat(5000))" : ""}`,
-      ],
-      working_directory: root,
-      environment: {
-        "app.setting": "value",
-        "1": "numbered",
-        MY_PASSWORD: "ordinary-evidence",
-        "REA_PROCESS_RUN_ID\n": "caller-value",
-      },
-      filesystem_observation_paths: [root],
-      limits: captureState === "truncated" ? { output_bytes: 128 } : {},
+    const readback = await connectOwnedProcessReadback();
+    onTestFinished(readback.close);
+    const { call } = readback;
+    const controller = await prepareOwnedProcessController({
+      template: "choices",
+      root,
+      truncated: captureState === "truncated",
     });
+    onTestFinished(controller.dispose);
+    const captured = await readback.captureResponse(controller);
     expect(captured.isError, JSON.stringify(captured)).not.toBe(true);
     const capture = toolContract("capture_process_scenario").outputSchema.parse(
       captured.structuredContent,
@@ -243,11 +250,12 @@ captureTest.each(["untruncated", "truncated"] as const)(
         capture.normalized_result.frames.map((frame) => frame.data).join(""),
       ).toContain("value ordinary-evidence caller-value");
     else expect(capture.normalized_result.truncated).toBe(true);
-    const environment = await call("capture_process_scenario", {
-      executable: "/usr/bin/printenv",
-      arguments: ["1"],
-      environment: { "1": "numbered" },
+    const environmentController = await prepareOwnedProcessController({
+      template: "printenv",
+      root: await createTestTempDirectory("rea-owned-printenv-"),
     });
+    onTestFinished(environmentController.dispose);
+    const environment = await readback.captureResponse(environmentController);
     const environmentEnvelope = toolContract(
       "capture_process_scenario",
     ).outputSchema.parse(environment.structuredContent);
@@ -355,15 +363,14 @@ captureTest.each(["untruncated", "truncated"] as const)(
 captureTest(
   "accepts NUL as actual terminal input while preserving capture defaults",
   async () => {
-    const { call } = await connectLocalToolsMcp();
-    const response = await call("capture_process_scenario", {
-      executable: process.execPath,
-      arguments: [
-        "-e",
-        "process.stdin.setRawMode(true);process.stdin.resume();process.stdin.once('data',bytes=>{console.log('stdin-byte:'+bytes[0]);process.exit(0)});console.log('ready')",
-      ],
-      events: [{ type: "input", at_ms: 1000, data: "\0" }],
+    const controller = await prepareOwnedProcessController({
+      template: "stdin",
+      root: await createTestTempDirectory("rea-owned-stdin-"),
     });
+    onTestFinished(controller.dispose);
+    const readback = await connectOwnedProcessReadback();
+    onTestFinished(readback.close);
+    const response = await readback.captureResponse(controller);
     expect(response.isError, JSON.stringify(response)).not.toBe(true);
     const capture = toolContract("capture_process_scenario").outputSchema.parse(
       response.structuredContent,

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 
-import { runCliJson as runCli } from "../../fixtures/cliJsonProcess.js";
+import { runRegisteredOwnedBrowserCli } from "../../support/web/registeredOwnedBrowserCliFixture.js";
 import {
   startFakeCdpBrowser,
   type FakeCdpBrowser,
@@ -28,7 +28,11 @@ it("reports missing JSON shapes only when body shapes are selected", async () =>
     "0",
   ];
   const selected = normalizedResult(
-    await runCli([...commonArgs, "--include-json-body-shapes", "--json"]),
+    await runRegisteredOwnedBrowserCli(browser, [
+      ...commonArgs,
+      "--include-json-body-shapes",
+      "--json",
+    ]),
   );
   expect(selected).toMatchObject({
     network: {
@@ -57,7 +61,9 @@ it("reports missing JSON shapes only when body shapes are selected", async () =>
     },
   });
 
-  const defaulted = normalizedResult(await runCli([...commonArgs, "--json"]));
+  const defaulted = normalizedResult(
+    await runRegisteredOwnedBrowserCli(browser, [...commonArgs, "--json"]),
+  );
   expect(defaulted).toMatchObject({
     network: {
       requests: [

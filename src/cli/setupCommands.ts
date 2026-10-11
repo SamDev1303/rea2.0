@@ -58,7 +58,7 @@ const registerSetupCommand = (
   environment: Readonly<NodeJS.ProcessEnv>,
 ): void => {
   cli.command(CLI_COMMANDS.setup, {
-    description: "Configure agent integrations and optional analysis providers",
+    description: "Configure integrations for our reviewed local build",
     outputPolicy: "agent-only",
     options: z.object({
       yes: z
@@ -68,7 +68,9 @@ const registerSetupCommand = (
       installHopper: z
         .boolean()
         .default(false)
-        .describe("Also approve Hopper installation with --yes"),
+        .describe(
+          "Request engine installation; unavailable in this protected local delivery",
+        ),
       client: z
         .array(supportedClientSchema)
         .default([])
@@ -85,7 +87,7 @@ const registerSetupCommand = (
         .boolean()
         .optional()
         .describe(
-          "Override the bundled skill included with agent integrations",
+          "Request bundled skill installation; /rea2 is managed by the shared registry",
         ),
       dryRun: z
         .boolean()
@@ -113,7 +115,7 @@ const registerDoctorCommand = (
   environment: Readonly<NodeJS.ProcessEnv>,
 ): void => {
   cli.command(CLI_COMMANDS.doctor, {
-    description: "Check whether REA is ready",
+    description: "Check whether REA 2.0 is ready",
     options: z.object({
       target: z.string().optional().describe("Optional app path to check"),
       client: z
@@ -146,7 +148,7 @@ const registerMaintenanceCommands = (
   environment: Readonly<NodeJS.ProcessEnv>,
 ): void => {
   cli.command(CLI_COMMANDS.uninstall, {
-    description: "Remove REA-owned agent configuration and skill files",
+    description: "Remove registrations owned by this REA 2.0 checkout",
     options: z.object({
       purgeData: z
         .boolean()
@@ -170,8 +172,7 @@ const registerMaintenanceCommands = (
       ),
   });
   cli.command(CLI_COMMANDS.update, {
-    description:
-      "Update this REA installation and verify the installed release",
+    description: "Explain the reviewed local-build update workflow",
     run: ({ formatExplicit }) =>
       logCliCommand(
         logger,
@@ -229,10 +230,6 @@ const setupRunOptions = (
   hasExplicitScope: boolean,
 ): SetupOptions => {
   const { options } = input;
-  const agentIntegrationSelected =
-    options.allDetected ||
-    options.client.length > 0 ||
-    options.skillClient.length > 0;
   const hasSelectedClients =
     hasExplicitScope &&
     !options.allDetected &&
@@ -243,21 +240,19 @@ const setupRunOptions = (
     structured: input.formatExplicit || options.dryRun,
     dryRun: options.dryRun,
     allDetectedClients: options.allDetected,
-    proposeHopper: interactive || options.installHopper,
+    proposeHopper: options.installHopper,
     ...(hasSelectedClients ? { clientIds: options.client } : {}),
     ...(options.skillClient.length > 0
       ? { skillClientIds: options.skillClient }
       : {}),
-    ...(hasExplicitScope
-      ? { installSkill: options.skill ?? agentIntegrationSelected }
-      : {}),
+    ...(hasExplicitScope ? { installSkill: options.skill ?? false } : {}),
     ...(interactive ? { onProgress: renderSetupProgress } : {}),
     ...(hasSelectedClients
       ? {
           readinessScope: {
             clients: options.client,
             providers: options.installHopper ? ["hopper"] : [],
-            skill: options.skill ?? agentIntegrationSelected,
+            skill: options.skill ?? false,
           },
         }
       : {}),

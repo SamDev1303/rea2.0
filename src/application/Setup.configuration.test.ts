@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolve } from "node:path";
 
 import { FakeSetupHost, options } from "./Setup.fixture.js";
 import { runSetup } from "./Setup.js";
+import { localRegistrationCommand } from "./ClientRegistrationIdentity.js";
 import { setupRegistrationCommand } from "./SetupHost.js";
 
 describe("setup workflow", () => {
@@ -28,7 +28,7 @@ describe("setup workflow", () => {
     host.hopper = "/opt/hopper/bin/Hopper";
     host.linuxDemoRuntimeMissing = true;
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () => Promise.resolve(true),
     );
@@ -168,7 +168,7 @@ describe("setup workflow action selection", () => {
     ];
 
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () =>
         Promise.resolve({
@@ -255,11 +255,9 @@ describe("setup workflow action selection", () => {
     expect(host.configuredCommands).toEqual([
       setupRegistrationCommand("win32", false),
     ]);
-    expect(setupRegistrationCommand("win32", false)).toEqual([
-      process.execPath,
-      resolve(process.argv[1] ?? "rea"),
-      "mcp",
-    ]);
+    expect(setupRegistrationCommand("win32", false)).toEqual(
+      localRegistrationCommand(),
+    );
   });
 
   it.each([

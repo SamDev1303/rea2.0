@@ -1,3 +1,7 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
+import { captureBrowserScenario } from "../../../src/application/BrowserScenarioCaptureService.js";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test } from "vitest";
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -169,7 +173,7 @@ describe("browser scenario MCP tool", () => {
     await Promise.all(resources.splice(0).map((item) => item.close()));
   });
 
-  test("runs the explicit scenario request without a permission grant", async () => {
+  test("runs direct recording-provider scenarios, retaining Evidence through MCP while public execution stays denied", async () => {
     const provider = new FakeBrowserScenarioProvider();
     const session = createTestBinarySession(() => ({
       execute: () => Promise.resolve(observed(null)),
@@ -182,7 +186,6 @@ describe("browser scenario MCP tool", () => {
         browserScenarioCapture: provider,
         availabilityPolicy: () => ({
           processCaptureEnabled: false,
-          investigationInputRoots: 0,
         }),
       },
     );
@@ -193,23 +196,50 @@ describe("browser scenario MCP tool", () => {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
 
-    const minimal = await client.callTool({
-      name: "capture_browser_scenario",
-      arguments: minimalScenario(),
-    });
-    expect(minimal.isError, JSON.stringify(minimal)).not.toBe(true);
+    const minimalInput = minimalScenario();
+    const minimalPriorCount = provider.scenarios.length;
+    await assertOwnedFixturePublicDenial(
+      client,
+      "capture_browser_scenario",
+      minimalInput,
+    );
+    expect(provider.scenarios).toHaveLength(minimalPriorCount);
+    const minimal = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await captureBrowserScenario(
+        provider,
+        toolContract("capture_browser_scenario").inputSchema.parse(
+          minimalInput,
+        ),
+      ),
+    );
+    expect(minimal.operation).toBe("capture_browser_scenario");
     expect(provider.scenarios[0]).toMatchObject({
       environment: { color_scheme: "light", service_workers: "block" },
       storage: { cookies: [], local_storage: [], session_storage: [] },
       capture: { after_each_step: [], at_end: ["url"], events: [] },
     });
 
-    const captured = await client.callTool({
-      name: "capture_browser_scenario",
-      arguments: scenario(),
-    });
-    expect(captured.isError, JSON.stringify(captured)).not.toBe(true);
-    expect(captured.structuredContent).toMatchObject({
+    const capturedInput = scenario();
+    const capturedPriorCount = provider.scenarios.length;
+    await assertOwnedFixturePublicDenial(
+      client,
+      "capture_browser_scenario",
+      capturedInput,
+    );
+    expect(provider.scenarios).toHaveLength(capturedPriorCount);
+    const captured = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await captureBrowserScenario(
+        provider,
+        toolContract("capture_browser_scenario").inputSchema.parse(
+          capturedInput,
+        ),
+      ),
+    );
+    expect(captured).toMatchObject({
       normalized_result: {
         scenario: {
           secret_references: ["login_input"],
@@ -217,7 +247,7 @@ describe("browser scenario MCP tool", () => {
       },
     });
     expect(provider.scenarios).toHaveLength(2);
-    expect(captured.structuredContent).toMatchObject({
+    expect(captured).toMatchObject({
       predicate_type: "rea.browser-scenario-capture",
       operation: "capture_browser_scenario",
       parameters: {
@@ -225,61 +255,78 @@ describe("browser scenario MCP tool", () => {
         scenario_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
       },
     });
-    const captureResult = Reflect.get(
-      captured.structuredContent ?? {},
-      "normalized_result",
-    );
-    const comparisonInput = {
-      before_scenario: captureResult,
-      after_scenario: captureResult,
-      normalization: { rules: [] },
-    };
-    const comparisonTool = (await client.listTools()).tools.find(
-      ({ name }) => name === "compare_web_captures",
-    );
-    if (comparisonTool === undefined)
-      throw new Error("Missing comparison tool");
-    const validateComparison = new Ajv2020({
-      strict: false,
-      validateFormats: false,
-    }).compile(comparisonTool.inputSchema);
-    expect(
-      validateComparison(comparisonInput),
-      JSON.stringify(validateComparison.errors),
-    ).toBe(true);
-    for (const malformed of [
-      { before_scenario: captureResult },
-      { before_scenario: captureResult, after: captureResult },
-      { ...comparisonInput, before: captureResult, after: captureResult },
-    ]) {
-      expect(validateComparison(malformed)).toBe(false);
-      const rejected = await client.callTool({
-        name: "compare_web_captures",
-        arguments: malformed,
-      });
-      expect(rejected.isError).toBe(true);
-    }
-    const compared = await client.callTool({
-      name: "compare_web_captures",
-      arguments: {
-        before_scenario: captureResult,
-        after_scenario: captureResult,
-      },
-    });
-    expect(compared.isError, JSON.stringify(compared)).not.toBe(true);
-    expect(compared.structuredContent).toMatchObject({
-      normalized_result: {
-        comparison_kind: "browser_scenario",
-        overall_status: "unchanged",
-        alignment: { status: "aligned", aligned_steps: 2 },
-      },
-    });
+    const captureResult = Reflect.get(captured ?? {}, "normalized_result");
+    await verifyScenarioComparisons(client, captureResult);
 
-    const otherOrigin = await client.callTool({
-      name: "capture_browser_scenario",
-      arguments: scenario("https://other.example.test"),
-    });
-    expect(otherOrigin.isError, JSON.stringify(otherOrigin)).not.toBe(true);
+    const otherOriginInput = scenario("https://other.example.test");
+    const otherOriginPriorCount = provider.scenarios.length;
+    await assertOwnedFixturePublicDenial(
+      client,
+      "capture_browser_scenario",
+      otherOriginInput,
+    );
+    expect(provider.scenarios).toHaveLength(otherOriginPriorCount);
+    const otherOrigin = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await captureBrowserScenario(
+        provider,
+        toolContract("capture_browser_scenario").inputSchema.parse(
+          otherOriginInput,
+        ),
+      ),
+    );
+    expect(otherOrigin.operation).toBe("capture_browser_scenario");
     expect(provider.scenarios).toHaveLength(3);
   });
 });
+
+const verifyScenarioComparisons = async (
+  client: Client,
+  captureResult: unknown,
+): Promise<void> => {
+  const comparisonInput = {
+    before_scenario: captureResult,
+    after_scenario: captureResult,
+    normalization: { rules: [] },
+  };
+  const comparisonTool = (await client.listTools()).tools.find(
+    ({ name }) => name === "compare_web_captures",
+  );
+  if (comparisonTool === undefined) throw new Error("Missing comparison tool");
+  const validateComparison = new Ajv2020({
+    strict: false,
+    validateFormats: false,
+  }).compile(comparisonTool.inputSchema);
+  expect(
+    validateComparison(comparisonInput),
+    JSON.stringify(validateComparison.errors),
+  ).toBe(true);
+  for (const malformed of [
+    { before_scenario: captureResult },
+    { before_scenario: captureResult, after: captureResult },
+    { ...comparisonInput, before: captureResult, after: captureResult },
+  ]) {
+    expect(validateComparison(malformed)).toBe(false);
+    const rejected = await client.callTool({
+      name: "compare_web_captures",
+      arguments: malformed,
+    });
+    expect(rejected.isError).toBe(true);
+  }
+  const compared = await client.callTool({
+    name: "compare_web_captures",
+    arguments: {
+      before_scenario: captureResult,
+      after_scenario: captureResult,
+    },
+  });
+  expect(compared.isError, JSON.stringify(compared)).not.toBe(true);
+  expect(compared.structuredContent).toMatchObject({
+    normalized_result: {
+      comparison_kind: "browser_scenario",
+      overall_status: "unchanged",
+      alignment: { status: "aligned", aligned_steps: 2 },
+    },
+  });
+};

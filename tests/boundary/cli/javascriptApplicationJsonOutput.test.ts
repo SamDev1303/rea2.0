@@ -32,7 +32,10 @@ for (const scenario of [
     async ({ cli }) => {
       const root = await createTestTempDirectory("rea-js-json-output-");
       await writeFile(join(root, "main.js"), "fetch('');\n");
-      const direct = await analyzeJavaScriptApplication({ input_path: root });
+      const direct = await analyzeJavaScriptApplication({
+        input_path: root,
+        ...(scenario.command === "analyze" ? { format: "directory" } : {}),
+      });
       if (!direct.ok) throw direct.error;
       const output = await cli.run({
         arguments: [

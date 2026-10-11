@@ -1,3 +1,5 @@
+import { copyFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { inspectBundleKeyedArchive } from "../../../src/artifacts/apple/KeyedArchiveReader.js";
 import { keyedArchiveResultSchema } from "../../../src/domain/apple/keyedArchive.js";
@@ -9,6 +11,8 @@ import {
   expectKeyedArchiveIntegerCase,
 } from "../../fixtures/keyedArchiveIntegers.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { runOwnedKeyedArchiveCli } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const cases = keyedArchiveIntegerFormats.flatMap((format) =>
   keyedArchiveIntegerCases.map((selectedCase) => ({ format, selectedCase })),
@@ -36,14 +40,16 @@ describe.skipIf(process.platform !== "darwin")(
     );
     cliTest.for(cases)(
       "built CLI preserves $format $selectedCase numeric meaning",
-      async ({ format, selectedCase }, { cli }) => {
+      async ({ format, selectedCase }, { processes }) => {
         const fixture = await keyedArchiveIntegerFixture(format);
-        const output = await cli.run({
-          arguments: ["inspect-keyed-archive", fixture.archivePath, "--json"],
-          environment: {
-            REA_LOG_LEVEL: "silent",
-            REA_ANALYSIS_PROVIDER: "auto",
-          },
+        // Keep compiler caches and oracle files outside the sealed reader carrier.
+        const root = await createTestTempDirectory("rea-keyed-cli-carrier-");
+        const path = join(root, fixture.selected.filename);
+        await copyFile(fixture.archivePath, path);
+        const output = await runOwnedKeyedArchiveCli(processes, {
+          root,
+          path,
+          digest: fixture.digest,
         });
         expect(output.exitCode).toBe(0);
         const result = keyedArchiveResultSchema.parse(

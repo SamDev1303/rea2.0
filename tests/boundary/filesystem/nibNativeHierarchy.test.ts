@@ -17,6 +17,7 @@ import {
   interfaceBuilderUidCases,
 } from "../../fixtures/interfaceBuilderMalformedUid.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { runOwnedInterfaceBuilderCli } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const compile = promisify(execFile);
 
@@ -210,14 +211,16 @@ describe.skipIf(process.platform !== "darwin")(
     );
     cliTest.for(interfaceBuilderUidCases)(
       "built CLI reports $0 hierarchy coverage and original bytes",
-      async (selectedCase, { cli }) => {
+      async (selectedCase, { processes }) => {
         const fixture = await createInterfaceBuilderUidFixture(selectedCase);
-        const output = await cli.run({
-          arguments: ["decode-interface-builder", fixture.app, "--json"],
-          environment: {
-            REA_LOG_LEVEL: "silent",
-            REA_ANALYSIS_PROVIDER: "auto",
-          },
+        const output = await runOwnedInterfaceBuilderCli(processes, {
+          root: fixture.app,
+          directories: ["Contents", "Contents/MacOS", "Contents/Resources"],
+          files: [
+            "Contents/Info.plist",
+            "Contents/MacOS/App",
+            "Contents/Resources/Views.nib",
+          ],
         });
         expect(output.exitCode).toBe(0);
         const result = interfaceBuilderAnalysisSchema.parse(

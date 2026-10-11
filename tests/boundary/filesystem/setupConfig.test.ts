@@ -6,9 +6,9 @@ import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 import { resolveClientConfigTransactionPath } from "../../../src/application/ClientConfigPath.js";
 import { configureClientConfiguration } from "../../../src/application/SetupClientConfiguration.js";
-import { PRODUCT_IDENTITY } from "../../../src/identity.js";
+import { localRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
 
-const pinnedPackage = PRODUCT_IDENTITY.registrationPackageSpecifier;
+const [localCommand, ...localArgs] = localRegistrationCommand();
 
 describe("JSON client configuration transaction: writing configuration through safe paths", () => {
   it.skipIf(typeof process.getuid !== "function")(
@@ -51,9 +51,9 @@ describe("JSON client configuration transaction: writing configuration through s
       theme: "dark",
       mcpServers: {
         other: { command: "other" },
-        rea: {
-          command: "npx",
-          args: ["-y", pinnedPackage, "mcp"],
+        rea2: {
+          command: localCommand,
+          args: localArgs,
         },
       },
     });
@@ -79,9 +79,9 @@ describe("JSON client configuration transaction: writing configuration through s
     expect(JSON.parse(await readFile(targetPath, "utf8"))).toMatchObject({
       theme: "dark",
       mcpServers: {
-        rea: {
-          command: "npx",
-          args: ["-y", pinnedPackage, "mcp"],
+        rea2: {
+          command: localCommand,
+          args: localArgs,
         },
       },
     });
@@ -124,7 +124,7 @@ describe("JSON client configuration transaction: keeping matching configuration 
     const configPath = join(directory, "mcp.json");
     await writeFile(
       configPath,
-      `${JSON.stringify({ mcpServers: { rea: { command: "npx", args: ["-y", pinnedPackage, "mcp"] } } })}\n`,
+      `${JSON.stringify({ mcpServers: { rea2: { command: localCommand, args: localArgs } } })}\n`,
     );
     expect(
       await configureClientConfiguration({
@@ -147,13 +147,13 @@ describe("JSON client configuration transaction: keeping matching configuration 
       configPath,
       `${JSON.stringify({
         mcpServers: {
-          rea: {
+          rea2: {
             env: {
               JAVA_HOME: "/usr/lib/jvm/jdk-21",
               GHIDRA_INSTALL_DIR: "/opt/ghidra",
             },
-            args: ["-y", pinnedPackage, "mcp"],
-            command: "npx",
+            args: localArgs,
+            command: localCommand,
           },
         },
       })}\n`,
@@ -179,7 +179,7 @@ describe("JSON client configuration migration and provider paths", () => {
     const directory = await createTestTempDirectory("rea-setup-");
     const configPath = join(directory, "mcp.json");
     const original =
-      '{"theme":"dark","mcpServers":{"rea":{"command":"npx","args":["-y","rea-agents","mcp"]},"other":{"command":"other"}}}\n';
+      '{"theme":"dark","mcpServers":{"rea2":{"command":"npx","args":["-y","rea-agents","mcp"]},"other":{"command":"other"}}}\n';
     await writeFile(configPath, original);
 
     expect(
@@ -193,9 +193,9 @@ describe("JSON client configuration migration and provider paths", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
       theme: "dark",
       mcpServers: {
-        rea: {
-          command: "npx",
-          args: ["-y", pinnedPackage, "mcp"],
+        rea2: {
+          command: localCommand,
+          args: localArgs,
         },
         other: { command: "other" },
       },
@@ -219,9 +219,9 @@ describe("JSON client configuration migration and provider paths", () => {
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       mcpServers: {
-        rea: {
-          command: "npx",
-          args: ["-y", pinnedPackage, "mcp"],
+        rea2: {
+          command: localCommand,
+          args: localArgs,
           env: { HOPPER_LAUNCHER_PATH: hopperPath },
         },
       },
@@ -257,7 +257,7 @@ describe("JSON client configuration migration and provider paths", () => {
     });
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       mcpServers: {
-        rea: {
+        rea2: {
           env: {
             GHIDRA_INSTALL_DIR: environment.GHIDRA_INSTALL_DIR,
             JAVA_HOME: environment.JAVA_HOME,
@@ -329,4 +329,29 @@ describe("JSON client configuration migration and provider paths", () => {
       readFile(`${configPath}.rea.backup`, "utf8"),
     ).rejects.toThrow();
   });
+});
+
+it("adds rea2 without adopting or replacing an upstream rea registration", async () => {
+  const directory = await createTestTempDirectory("rea2-additive-");
+  const configPath = join(directory, "mcp.json");
+  const upstream = { command: "npx", args: ["-y", "rea-agents@6.4.0", "mcp"] };
+  const original = JSON.stringify({
+    mcpServers: { rea: upstream, other: { command: "other" } },
+  });
+  await writeFile(configPath, original);
+  expect(
+    await configureClientConfiguration({
+      name: "cursor",
+      configPath,
+      format: "json",
+    }),
+  ).toMatchObject({ status: "configured" });
+  expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+    mcpServers: {
+      rea: upstream,
+      other: { command: "other" },
+      rea2: { command: localCommand, args: localArgs },
+    },
+  });
+  expect(await readFile(`${configPath}.rea.backup`, "utf8")).toBe(original);
 });

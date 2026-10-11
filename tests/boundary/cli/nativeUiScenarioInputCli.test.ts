@@ -1,6 +1,9 @@
 import { describe, expect } from "vitest";
 
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { registerUtilityCommands } from "../../../src/cli/utilityCommands.js";
+import { silentLogger } from "../../../src/logger.js";
 import type { TestCli } from "../../support/cli/cliFixture.js";
 
 const runCapture = async (cli: TestCli, steps: string | undefined) => {
@@ -14,10 +17,32 @@ const runCapture = async (cli: TestCli, steps: string | undefined) => {
   ];
   if (steps !== undefined) arguments_.push("--steps", steps);
   arguments_.push("--json");
-  return cli.run({
+  const denied = await cli.run({
     arguments: arguments_,
     environment: { REA_LOG_LEVEL: "silent" },
   });
+  expect(denied.exitCode).not.toBe(0);
+  expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+  let acquisitions = 0;
+  const result = await serveRegisteredCliFixture((fixture) => {
+    registerUtilityCommands(
+      fixture,
+      silentLogger,
+      {},
+      {
+        runSessionStatus: async () => {
+          acquisitions++;
+          throw new Error("Status acquisition forbidden");
+        },
+        runProviderAnalysis: async () => {
+          acquisitions++;
+          throw new Error("Native acquisition forbidden");
+        },
+      },
+    );
+  }, arguments_);
+  expect(acquisitions).toBe(0);
+  return result;
 };
 
 describe("native UI scenario CLI input", () => {

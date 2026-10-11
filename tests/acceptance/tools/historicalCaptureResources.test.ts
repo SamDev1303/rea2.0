@@ -1,17 +1,15 @@
-import { execFile } from "node:child_process";
 import { truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
 import { WEB_NETWORK_CAPTURE_LIMITS } from "../../../src/domain/webNetworkCapture.js";
-import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
-const execute = promisify(execFile);
-const cli = fileURLToPath(new URL("../../../scripts/rea.mjs", import.meta.url));
+import pino from "pino";
+import { loadCompiledHistoricalCaptureFixture } from "../../support/web/compiledHistoricalCaptureFixture.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { runCliJson } from "../../fixtures/cliJsonProcess.js";
+import { connectOwnedEvidenceFixture } from "../../support/cli/ownedEvidenceFixture.js";
 const entry = JSON.stringify({
   startedDateTime: "2026-01-01T00:00:00.000Z",
   time: 1,
@@ -50,14 +48,28 @@ it("reports real HAR heap exhaustion through CLI and MCP and preserves server us
     WEB_NETWORK_CAPTURE_LIMITS.inputBytes,
   );
   await writeFile(path, dense);
-  const { call, client } = await connectLocalToolsMcp();
-  const response = await call("inspect_web_network_capture", {
+  const { session, client } = await connectOwnedEvidenceFixture();
+  const input = {
     capture_path: path,
     format: "har",
     sensitive_values: ["caller-marked"],
+  };
+  const denied = await client.callTool({
+    name: "inspect_web_network_capture",
+    arguments: input,
   });
-  expect(response.isError).toBe(true);
-  expect(parseMcpToolError(response)).toMatchObject({
+  expect(denied.isError).toBe(true);
+  const {
+    createWebNetworkCaptureService,
+    registerWebNetworkCaptureCommands,
+    projectAnalysisError,
+  } = await loadCompiledHistoricalCaptureFixture();
+  const service = createWebNetworkCaptureService({});
+  const response = await service.inspect(input);
+  expect(response.ok).toBe(false);
+  if (response.ok) throw new Error("Dense HAR unexpectedly fit the fixed heap");
+  const projected = projectAnalysisError(response.error);
+  expect({ error: projected }).toMatchObject({
     error: {
       code: "resource_constraint",
       retryable: false,
@@ -81,41 +93,52 @@ it("reports real HAR heap exhaustion through CLI and MCP and preserves server us
       },
     },
   });
-  expect(JSON.stringify(response)).not.toContain("caller-marked");
-  expect(JSON.stringify(response)).not.toContain("rea doctor");
-  const failed: unknown = await execute(process.execPath, [
-    cli,
-    "inspect-web-network-capture",
-    path,
-    "har",
-    "--json",
-  ]).then(
-    () => undefined,
-    (cause: unknown) => cause,
+  expect(JSON.stringify(projected)).not.toContain("caller-marked");
+  expect(JSON.stringify(projected)).not.toContain("rea doctor");
+  const arguments_ = ["inspect-web-network-capture", path, "har", "--json"];
+  expect(await runCliJson(arguments_, {})).toMatchObject({
+    code: "capability_unavailable",
+  });
+  const failed = await serveRegisteredCliFixture(
+    (registered) =>
+      registerWebNetworkCaptureCommands(
+        registered,
+        pino({ level: "silent" }),
+        {},
+      ),
+    arguments_,
   );
-  expect(failed).toMatchObject({ code: 1 });
-  const stdout =
-    typeof failed === "object" && failed !== null && "stdout" in failed
-      ? String(failed.stdout)
-      : "";
-  expect(JSON.parse(stdout)).toMatchObject({ code: "resource_constraint" });
+  expect(failed.exitCode).toBe(1);
+  expect(failed.json).toMatchObject({ code: "resource_constraint" });
   const small = join(root, "small.har");
   await writeFile(small, capture(2));
   await client.ping();
-  const control = await call("inspect_web_network_capture", {
+  const control = await service.inspect({
     capture_path: small,
     format: "har",
   });
-  expect(control.isError, JSON.stringify(control)).not.toBe(true);
-  expect(control.structuredContent).toMatchObject({
+  expect(control.ok).toBe(true);
+  if (!control.ok) throw control.error;
+  expect(control.value).toMatchObject({
     normalized_result: { total_records: 2 },
   });
+  expect(session.recordEvidence(control.value)).toMatchObject({ ok: true });
+  const retained = await client.callTool({
+    name: "get_evidence_bundle",
+    arguments: {},
+  });
+  expect(retained.isError).not.toBe(true);
+  expect(retained.structuredContent).toMatchObject({
+    result: { records: expect.arrayContaining([control.value]) },
+  });
   await truncate(path, WEB_NETWORK_CAPTURE_LIMITS.inputBytes + 1);
-  const oversized = await call("inspect_web_network_capture", {
+  const oversized = await service.inspect({
     capture_path: path,
     format: "har",
   });
-  expect(parseMcpToolError(oversized)).toMatchObject({
-    error: { code: "invalid_request" },
+  expect(oversized.ok).toBe(false);
+  if (oversized.ok) throw new Error("Oversized capture unexpectedly accepted");
+  expect(projectAnalysisError(oversized.error)).toMatchObject({
+    code: "invalid_request",
   });
 }, 60_000);

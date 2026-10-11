@@ -1,3 +1,16 @@
+import { createHash } from "node:crypto";
+import { createOwnedAppleStaticSession } from "../../../src/application/binary/OwnedAppleStaticSession.js";
+import {
+  attachOwnedFixturePolicy,
+  digestOwnedFixtureInput,
+  sealOwnedFixturePolicy,
+} from "../../../src/application/investigationSafety/OwnedFixturePolicy.js";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
+import {
+  createOwnedArtifactProducer,
+  requireOwnedProducerEvidence,
+  assertOwnedFixturePublicDenial,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,7 +26,7 @@ import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { ArtifactProvider } from "../../../src/artifacts/ArtifactProvider.js";
 import { createServer } from "../../../src/server/createServer.js";
 
-it("inspects a standalone keyed archive through MCP with original object identities", async () => {
+it("inspects an explicitly sealed standalone keyed archive through MCP with original object identities", async () => {
   const directory = await createTestTempDirectory("rea-keyed-mcp-");
   const path = join(directory, "archive.plist");
   await writeFile(
@@ -25,14 +38,60 @@ it("inspects a standalone keyed archive through MCP with original object identit
       ),
     ),
   );
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
-  const server = createServer({ kind: "session", session });
+  const session = createOwnedAppleStaticSession();
+  const server = createServer(
+    { kind: "session", session },
+    { environment: {} },
+  );
+  const portId = "controller-owned-apple-static-port";
+  const requests = [
+    { name: "open_binary" as const, arguments: { path } },
+    { name: "inspect_keyed_archive" as const, arguments: {} },
+    {
+      name: "inspect_keyed_archive" as const,
+      arguments: { path: "other.plist" },
+    },
+    { name: "inspect_keyed_archive" as const, arguments: { root: "missing" } },
+  ];
+  const token = await sealOwnedFixturePolicy(
+    {
+      roots: [directory],
+      files: [
+        {
+          path,
+          sha256: createHash("sha256")
+            .update(await readFile(path))
+            .digest("hex"),
+          role: "dependency",
+        },
+      ],
+      static_inventory: { directories: [] },
+      endpoints: [],
+      environment: [],
+      available_capabilities: ["static"],
+      grants: requests.map((request) => ({
+        operation: request.name,
+        input_digest: digestOwnedFixtureInput(
+          toolContract(request.name).inputSchema.parse(request.arguments),
+        ),
+        capability: "static",
+        mode: "owned-static" as const,
+        port_id: portId,
+      })),
+    },
+    { owned_static_ports: [{ port_id: portId, reference: session }] },
+  );
+  attachOwnedFixturePolicy(server, token, session);
   const client = new Client({ name: "keyed-mcp-test", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: join(directory, "ungranted.plist"),
+    });
+    expect(session.activeTarget()).toBeUndefined();
     const opened = await client.callTool({
       name: "open_binary",
       arguments: { path },
@@ -106,7 +165,7 @@ it("inspects a standalone keyed archive through MCP with original object identit
   }
 });
 
-it("returns all 520 ZIP file occurrences in one inspect_artifact MCP result", async () => {
+it("retains all 520 owned ZIP file occurrences in one direct inspection Evidence while public MCP parsing is denied", async () => {
   const directory = await createTestTempDirectory("rea-artifact-inline-");
   const archive = join(directory, "many.zip");
   const writer = new ZipWriter(new Uint8ArrayWriter());
@@ -118,7 +177,8 @@ it("returns all 520 ZIP file occurrences in one inspect_artifact MCP result", as
     );
   await writeFile(archive, await writer.close());
 
-  const session = createTestBinarySession(new ArtifactProvider(process.env));
+  const session = createTestBinarySession(new ArtifactProvider({}));
+  const producer = createOwnedArtifactProducer(session, [archive]);
   const server = createServer({ kind: "session", session });
   const client = new Client({ name: "artifact-inline-test", version: "1" });
   const [clientTransport, serverTransport] =
@@ -126,18 +186,36 @@ it("returns all 520 ZIP file occurrences in one inspect_artifact MCP result", as
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const opened = await client.callTool({
-      name: "open_binary",
-      arguments: { path: archive },
+    await assertOwnedFixturePublicDenial(client, "open_binary", {
+      path: archive,
     });
-    expect(opened.isError).not.toBe(true);
-    const result = await client.callTool({
-      name: "inspect_artifact",
-      arguments: {},
-    });
-    expect(result.isError, JSON.stringify(result.structuredContent)).not.toBe(
-      true,
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await producer.open(archive)).ok).toBe(true);
+    await assertOwnedFixturePublicDenial(client, "inspect_artifact", {});
+    const result = requireOwnedProducerEvidence(
+      await producer.produce("inspect_artifact"),
     );
+    expect(session.evidenceById(result.evidence_id)).toEqual(result);
+    const retained = await client.callTool({
+      name: "get_evidence_bundle",
+      arguments: {
+        detail: "summary",
+        filters: { evidence_id: result.evidence_id },
+      },
+    });
+    expect(retained.isError).not.toBe(true);
+    expect(retained.structuredContent).toMatchObject({
+      result: {
+        matching_records: 1,
+        records: [
+          {
+            evidence_id: result.evidence_id,
+            operation: "inspect_artifact",
+            retention: "complete-record",
+          },
+        ],
+      },
+    });
     const inspection = z
       .object({
         substeps: z.array(
@@ -151,9 +229,8 @@ it("returns all 520 ZIP file occurrences in one inspect_artifact MCP result", as
         ),
       })
       .parse(
-        z
-          .object({ normalized_result: z.unknown() })
-          .parse(result.structuredContent).normalized_result,
+        z.object({ normalized_result: z.unknown() }).parse(result)
+          .normalized_result,
       );
     expect(
       inspection.substeps[0]?.evidence.normalized_result.occurrences,

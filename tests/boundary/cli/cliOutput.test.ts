@@ -1,10 +1,13 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { createPackageWithOptions } from "@electron/asar";
 import { describe, expect, it } from "vitest";
 
 import { workspaceCliTest } from "../../support/cli/workspaceCliFixture.js";
+import { ArtifactProvider } from "../../../src/artifacts/ArtifactProvider.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 
 import {
   renderCliOutputArgumentError,
@@ -342,11 +345,30 @@ describe("compiled CLI artifact diagnostics", () => {
         arguments: ["--json", "inspect-artifact", archive],
       });
       expect(result.exitCode).toBe(1);
-      const output = JSON.stringify(result.json);
-      expect(output).toContain('"logical_path":"main.js"');
-      expect(output).toMatch(/"declared_sha256":"[a-f0-9]{64}"/u);
-      expect(output).toMatch(/"calculated_sha256":"[a-f0-9]{64}"/u);
-      expect(output).toContain('"unpacked":true');
+      expect(result.json).toMatchObject({ code: "capability_unavailable" });
+      const client = new ArtifactProvider({}).createClient({
+        path: archive,
+        sha256: createHash("sha256")
+          .update(await readFile(archive))
+          .digest("hex"),
+        kind: "archive",
+        format: "asar",
+      });
+      try {
+        const inspected = await client.execute("inspect_artifact", {
+          integrity_policy: "fail",
+        });
+        expect(inspected.ok).toBe(false);
+        if (inspected.ok)
+          throw new Error("Expected synthetic ASAR integrity failure");
+        const output = JSON.stringify(projectAnalysisError(inspected.error));
+        expect(output).toContain('"logical_path":"main.js"');
+        expect(output).toMatch(/"declared_sha256":"[a-f0-9]{64}"/u);
+        expect(output).toMatch(/"calculated_sha256":"[a-f0-9]{64}"/u);
+        expect(output).toContain('"unpacked":true');
+      } finally {
+        expect(await client.close()).toEqual({ ok: true, value: null });
+      }
     },
     CLI_INTEGRATION_TIMEOUT_MS,
   );

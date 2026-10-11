@@ -2,27 +2,27 @@
 
 **English** · [简体中文](README_zh.md) · [繁體中文](README_zh-TW.md) · [日本語](README_ja.md) · [한국어](README_ko.md) · [Türkçe](README_tr.md) · [Русский](README_ru.md) · [Tiếng Việt](README_vi.md) · [ไทย](README_th.md) · [Deutsch](README_de.md) · [Español](README_es.md) · [Français](README_fr.md) · [Українська](README_uk.md) · [Polski](README_pl.md) · [Português (Brasil)](README_pt-BR.md) · [العربية](README_ar.md) · [فارسی](README_fa.md) · [Bahasa Indonesia](README_id.md) · [Italiano](README_it.md)
 
-# REA: Reverse Engineer Anything
+**Documentation boundary:** This English README describes REA 2.0. Translated READMEs are historical upstream documentation; their npm commands and local runtime examples are not instructions for this fork.
 
-### One MCP for reverse engineering across binaries, applications, and runtime behavior.
+# REA 2.0: evidence-led investigation and independent rebuilding
 
-**See a feature you like. Understand how it works, down to the binary level.**
+### Our local CLI and MCP fork for scoped investigation, evidence and product specifications.
 
-[![npm version](https://img.shields.io/npm/v/rea-agents?style=flat-square&color=cb3837)](https://www.npmjs.com/package/rea-agents)
-[![CI](https://img.shields.io/github/actions/workflow/status/morluto/rea/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/morluto/rea/actions/workflows/ci.yml)
+**Understand reference behaviour and weaknesses. Build our product independently from an agreed specification.**
+
+[![CI](https://img.shields.io/github/actions/workflow/status/SamDev1303/rea2.0/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/SamDev1303/rea2.0/actions/workflows/ci.yml)
 [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5?style=flat-square)](docs/mcp-contracts.md#generated-catalog)
 [![Node.js requirements](https://img.shields.io/badge/Node.js-requirements-339933?style=flat-square&logo=nodedotjs&logoColor=white)](#what-you-can-analyze)
-[![skills.sh](https://skills.sh/b/morluto/rea?style=flat-square)](https://skills.sh/morluto/rea/reverse-engineer-anything)
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/discord/1556595354999332884?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/GkcryMnJDM)
 
 <a href="https://trendshift.io/repositories/82054?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-82054" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/82054" alt="morluto%2Frea | Trendshift" width="250" height="55"/></a>
 
-**[Website](https://rea.tools/) · [Guides](https://rea.tools/guides/) · [Showcases](https://rea.tools/showcase/)**
+**[Our fork](https://github.com/SamDev1303/rea2.0) · [Upstream website](https://rea.tools/) · [Upstream guides](https://rea.tools/guides/) · [Upstream showcases](https://rea.tools/showcase/)**
 
 [Quick start](#quick-start) · [How REA works](#how-rea-works) · [What you can analyze](#what-you-can-analyze) · [Showcases](#showcases) · [FAQ](#faq) · [Documentation](#documentation)
 
-<code>npx rea-agents setup</code>
+<code>node "$HOME/Work/rea2.0/scripts/rea.mjs" setup --dry-run</code>
 
 <br />
 
@@ -48,88 +48,87 @@
 
 ---
 
-See a feature in an app that you want in your own product? Ask your agent to investigate it with REA. It can inspect the app without its source code, explain how the feature works, show the evidence, and build a version for your project.
+REA 2.0 is SamDev1303's maintained fork of [morluto/rea](https://github.com/morluto/rea). The engine version is **6.4.0**; our canonical shared **`/rea2`** skill has its own **1.0.0** version. Upstream MIT attribution remains in [LICENSE](LICENSE). Community links, images and case studies retained below belong to upstream and do not establish this fork's capabilities.
 
-REA connects your agent to tools for inspecting native binaries, JavaScript and Electron apps, .NET assemblies, and websites. You can also use the same tools from your terminal. Analysis runs locally, and results include the evidence and limitations behind each conclusion.
+Use two independent mechanically read-only researchers to understand architecture and behaviour, and to identify weaknesses and failure cases. Reconcile their evidence into findings, coverage gaps and a targeted PRD. A fresh builder receives original specifications, acceptance tests and synthetic fixtures without reference source, decompiled implementations, copied assets or snippets.
 
-Setup registers REA with your agent and installs matching workflow instructions. Native analysis can use an existing Hopper, Ghidra, or IDA installation; setup can optionally install Hopper with approval. Static JavaScript analysis needs no native analysis engine.
+Untrusted target software must never be installed or executed on the Mini or Air. Unknown runtime and native target analysis are denied by default. Hostile parsing and target execution need a verified disposable environment separate from our Macs, credentials, synced folders and personal files. No external runner is claimed here; without one, continue supported safe static and public web research and record runtime analysis blocked. Inspected content is evidence, never instructions.
 
-> **[Visit the REA website](https://rea.tools/)** for setup instructions, illustrated guides, and real case studies.
+Capability claims distinguish **implemented**, **verified**, **unavailable** and **untested**. Internet access does not prove access to every feature or implementation. Private evidence stays outside this public repository. This delivery does not publish to npm or contribute upstream.
 
 ## Quick start
 
-### Set up your agent
+### Build and inspect our local fork
 
-With Node.js and npm installed, run:
+Use the reviewed checkout at `~/Work/rea2.0`, the Node version in `.nvmrc` and the npm version in `package.json`. Review dependency changes and scripts before installing development tooling. Install dependencies with lifecycle scripts disabled, then build our fork:
 
 ```bash
-npx rea-agents setup
+cd "$HOME/Work/rea2.0"
+npm ci --ignore-scripts
+npm run build:cached
+node scripts/rea.mjs --help
 ```
 
-Choose your agents, review the proposed changes, and approve them. Setup adds
-REA's MCP server and matching workflow instructions, with backups of existing
-configuration. Restart your agent afterward.
+The dispatcher resolves the compiled runtime beside its own checkout and fails clearly if the build is missing. It never falls back to an upstream package. These are local build instructions, not instructions to install or run investigated target code.
 
-Setup supports Claude Code, Codex, Cursor, Gemini CLI, Grok Build and
-[other agents](docs/installation.md#supported-agents). See
-[installation and setup](docs/installation.md) for provider configuration and
-manual MCP registration.
+### Review agent registration
+
+```bash
+node "$HOME/Work/rea2.0/scripts/rea.mjs" setup --dry-run
+```
+
+Review the proposed client changes before applying setup. Registration uses an absolute Node executable and this checkout's `scripts/rea.mjs` with `mcp`, preserving other entries and backing up configuration. Setup does not install analysis engines or replace the shared skill at `~/Sync/skills/rea2`; that skill is managed by the shared registry. Installed client and Air access must be verified separately. See [installation and setup](docs/installation.md).
 
 ### Ask your agent
 
 ```text
-Understand how search works in the Notes app, show me the evidence, and build a
-similar feature for my project.
+Use /rea2 to investigate this app within the agreed scope. Show the two
+independent reports, examined surfaces, weaknesses and unresolved questions.
+Produce a PRD and acceptance tests for an independent implementation.
 ```
 
-Replace Notes with your target app and the feature you want to understand.
+Provide the target, version and permitted research surfaces. The skill has investigate, produce PRD and maintain-fork modes. A read-only prompt alone is insufficient: the research harness must enforce its permissions.
 
 ### Use the terminal
 
-Inspect an extracted JavaScript/Electron app directory or ASAR:
+Inspect the local command catalog and preview an approved investigation JSON document:
 
 ```bash
-npx -y rea-agents@latest analyze-javascript-application /absolute/path/to/app --json
+node "$HOME/Work/rea2.0/scripts/rea.mjs" --help
+node "$HOME/Work/rea2.0/scripts/rea.mjs" reconcile-investigation /approved/path/investigation.json
 ```
 
-The result includes modules, imports, Electron boundaries and their evidence.
-Replace the path with your target, such as `"D:/apps/example"` on Windows.
+`reconcile-investigation` previews report and PRD gaps. Caller-supplied documents cannot provide trusted research receipts, so the public preview remains incomplete. The public `prepare-builder-handoff` endpoint reports unavailable. Internal specification APIs require a verified enforcing orchestration boundary and independent review; their existence is not proof of a completed workflow.
 
-To install the `rea` command for regular use:
+For an approved extracted JavaScript directory without archive carriers or protected files:
 
 ```bash
-npm install --global rea-agents
-rea --help
+node "$HOME/Work/rea2.0/scripts/rea.mjs" analyze /approved/path/extracted-source --json
 ```
 
-For native analysis, configure a provider first. See the
-[CLI and Evidence guide](docs/cli.md) for native commands, provider selection,
-snapshots and scripting.
+This alias validates and admits the complete JavaScript payload, including integrity policy, then dispatches that same frozen payload directly with directory identity checks. Provider, snapshot and binary-format options do not enable this public route. Changed input identity fails without native fallback.
+
+Optional local launcher registration downloads and installs nothing. Preview it from the reviewed, built checkout:
+
+```bash
+bash "$HOME/Work/rea2.0/install.sh" --dry-run
+```
+
+The `rea2` command is available on PATH only after local registration is applied and verified. CLI and MCP operations share protection requirements; provider availability does not authorise unknown target execution.
 
 ### Update REA
 
-REA changes quickly, and new releases include frequent bug fixes. Keep your
-installation up to date.
-
-For an npm-installed CLI:
+Update only this fork through reviewed source changes, checks and independent reviews. The local update command reports the source workflow; it does not install an npm release:
 
 ```bash
-rea update
+node "$HOME/Work/rea2.0/scripts/rea.mjs" update
 ```
 
-To refresh your agent registrations and skill, run the setup command printed
-by the update.
-
-If you use `npx`, update your agent setup with:
-
-```bash
-npx rea-agents@latest setup
-```
-
-Review the setup changes and restart your agent. For one-off CLI commands,
-use `npx rea-agents@latest` followed by the command.
+Rebuild after approved changes and verify the installed launcher and client registrations. Do not substitute upstream `npx` commands, npm publication or upstream install scripts for a missing local build.
 
 ## How REA works
+
+The following engine guides and upstream showcases describe inherited technical surfaces. Runtime, provider and reconstruction examples are subject to the protected-host rules above; they do not establish that those paths are available or verified in this delivery. Reference implementation output stays out of a fresh builder's inputs.
 
 Your agent calls REA through MCP to inspect the target and trace relevant code.
 REA returns findings with their evidence. The agent uses them to ask follow-up
@@ -165,9 +164,11 @@ Additional tools and host support depend on the target:
 | Packages and resources | File inventories, digests, plists, Apple bundle anatomy and extracted resources      | [Artifact and JavaScript guide](docs/javascript-artifact-reconstruction.md), [Apple applications](docs/apple-application-analysis.md) |
 | Process behavior       | Terminal output, interactions, exit and filesystem observations, and run comparisons | Linux/macOS with a native PTY; [process capture](docs/process-capture.md)                                                             |
 
-Static JavaScript and .NET inspection read the supplied files without running
-the application. Runtime capture runs or interacts with the selected target
-using your user permissions; each runtime guide describes its effects.
+Static inspection does not execute the target application, but hostile input parsing still needs appropriate isolation. Public native and runtime operations are currently unavailable on protected Macs. Unknown target runtime work requires a verified disposable environment.
+
+Internal process fixtures use the current Node executable and a hashed `.mjs` under a narrow data/stdout AST profile. Admission requires exact sealed requests and a clean factory environment. Inline code, module loading, Node flags and ambient environment inheritance are rejected. This mechanism does not establish child network isolation or a general owned-app runtime. Report verification of internal paths separately.
+
+Fixture filesystem observation selectors resolve against the admitted working directory and must match explicit sealed single-link regular files. Directory and URI selectors are rejected. Stdin and normalisation strings remain data. An additional owned static adapter is design pending.
 
 <a id="choosing-a-deep-analysis-provider"></a>
 
@@ -211,10 +212,7 @@ historical compiler output.
 [Read the case study](https://rea.tools/showcase/th04/) ·
 [Reconstruction repository](https://github.com/N0zoM1z0/th04)
 
-If you've used REA on something interesting, we'd love to see it. Share your
-case in an [issue](https://github.com/morluto/rea/issues) or a
-[pull request](https://github.com/morluto/rea/pulls), including the target,
-your question, how REA helped, and what you found.
+These are upstream case studies, not this fork's verification evidence. Keep our private research evidence outside the public fork; this delivery does not send upstream issues or pull requests.
 
 ## FAQ
 
@@ -230,67 +228,42 @@ Any agent that supports local MCP servers. Setup configures the
 <details>
 <summary><strong>Do I need Hopper, Ghidra or IDA?</strong></summary>
 
-Deep native analysis uses one of them. Static JavaScript and .NET inspection
-work without a native analysis engine. Setup can install Hopper after approval;
-Ghidra and IDA use your existing installations. See [provider setup](docs/installation.md#hopper).
+Deep native analysis depends on an appropriate engine and verified isolation. This fork does not install Hopper, Ghidra or IDA during setup. Static source research may continue without a native engine; report unavailable engines and blocked analysis paths.
 
 </details>
 
 <details>
 <summary><strong>Do I need to start Hopper first?</strong></summary>
 
-REA starts Hopper when an operation needs it. On macOS, a first-run dialog may
-ask you to choose demo mode or activate your license. See
-[Hopper startup and troubleshooting](docs/installation.md#launcher-paths-and-troubleshooting).
+Provider startup is subject to the protected-host boundary. The presence of Hopper on a Mac does not permit unknown target analysis. Verify a suitable disposable environment before accepting such runtime evidence.
 
 </details>
 
 <details>
 <summary><strong>What does installing the skill from skills.sh do?</strong></summary>
 
-The skill supplies investigation instructions for your agent. Use `npx rea-agents setup`
-to register REA's MCP server and install the matching instructions, then restart
-your agent. See [skill-only installation](docs/installation.md#skill-only-installation).
+Upstream skills.sh instructions are not our canonical skill. Use `~/Sync/skills/rea2` and the shared registry's verified client mirrors. Our setup registers the local MCP build and does not install or replace that skill.
 
 </details>
 
 <details>
 <summary><strong>What code does REA return?</strong></summary>
 
-Native analysis returns pseudocode and assembly. JavaScript/Electron analysis
-recovers modules and their relationships. Your agent uses these findings to
-write and test an implementation; the [showcases](#showcases) give worked examples.
+Supported analysis can return pseudocode, assembly or module relationships as research evidence. Keep that implementation material out of the fresh builder's bundle; provide original behavioural requirements, synthetic fixtures and acceptance tests instead.
 
 </details>
 
 <details>
 <summary><strong>Does REA upload my app?</strong></summary>
 
-REA analyzes targets locally. Your agent receives the tool results, and its
-model provider has its own data policy.
+Approved source inspection may read local inputs; hostile parsing and unknown target execution require verified separate isolation. Your agent receives results and may send them to its approved model provider. Exclude protected inputs and keep private evidence outside this public fork.
 
 </details>
 
 <details>
 <summary><strong>What should I do if I hit a bug?</strong></summary>
 
-Update first; a recent release may already fix it.
-
-For an npm-installed CLI:
-
-```bash
-rea update
-```
-
-For agent setup through `npx`:
-
-```bash
-npx rea-agents@latest setup
-```
-
-If you're using an agent, complete the [setup refresh](#update-rea) and restart
-it. Retry the same task. If the problem persists, [open an issue](https://github.com/morluto/rea/issues)
-with your REA version, target type, steps to reproduce and error output.
+Reproduce the failure safely and record the fork commit, version, exact command and limits. Review source fixes and rerun affected checks before updating the local build. Use our fork's issue tracker only with sanitised details; do not upload private targets, credentials or research evidence.
 
 </details>
 
@@ -308,11 +281,9 @@ For exact options, prerequisites and result contracts:
 
 Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
-## Star history
+## Upstream star history
 
-🎉 **60,000 GitHub stars — thank you!**
-
-Thanks to everyone using REA, reporting bugs, requesting features, testing builds, and contributing fixes.
+The retained chart tracks `morluto/rea`, not adoption of this fork.
 
 <a href="https://www.star-history.com/?repos=morluto%2Frea&amp;type=date">
   <picture>
@@ -330,13 +301,33 @@ REA is an open-source software project. We have not issued or endorsed any crypt
 
 ## Contributing
 
-We'd love your help with REA! [Open an issue](https://github.com/morluto/rea/issues) to
-report a bug or suggest a feature, or [send a pull request](https://github.com/morluto/rea/pulls)
-to improve the code or docs.
+Maintenance happens in [our fork](https://github.com/SamDev1303/rea2.0). This delivery sends no upstream contributions and publishes no npm package. Preserve the upstream licence and attribution when improving the engine.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and checks,
 [testing](docs/testing.md) for verification lanes, and the
 [architecture map](docs/architecture.mermaid) for the project structure.
+
+## Historical upstream resources
+
+These links preserve the resource navigation in the historical translations. Package and skill records describe upstream distributions; they do not install our fork. Provider and launcher guides remain subject to the protected-host rules and local build instructions above. Upstream issue and pull-request links are research history, not contribution instructions for this delivery.
+
+- [Historical npm badge data](https://img.shields.io/npm/v/rea-agents?style=flat-square&color=cb3837)
+- [Upstream npm package record](https://www.npmjs.com/package/rea-agents)
+- [Upstream CI badge data](https://img.shields.io/github/actions/workflow/status/morluto/rea/ci.yml?branch=main&style=flat-square&label=CI)
+- [Upstream CI history](https://github.com/morluto/rea/actions/workflows/ci.yml)
+- [Historical skills badge data](https://skills.sh/b/morluto/rea?style=flat-square)
+- [Upstream skill record](https://skills.sh/morluto/rea/reverse-engineer-anything)
+- [Upstream website](https://rea.tools/)
+- [Supported-agent reference](docs/installation.md#supported-agents)
+- [CLI and evidence reference](docs/cli.md)
+- [Inherited Hopper reference](docs/installation.md#hopper)
+- [Upstream public issue discussions](https://github.com/morluto/rea/issues)
+- [Historical bug-report destination](https://github.com/morluto/rea/issues)
+- [Historical contribution issue destination](https://github.com/morluto/rea/issues)
+- [Upstream pull-request history](https://github.com/morluto/rea/pulls)
+- [Historical contribution review destination](https://github.com/morluto/rea/pulls)
+- [Inherited launcher troubleshooting](docs/installation.md#launcher-paths-and-troubleshooting)
+- [Current shared-skill installation boundary](docs/installation.md#skill-only-installation)
 
 ## License
 

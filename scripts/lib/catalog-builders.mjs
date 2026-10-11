@@ -90,6 +90,9 @@ export const toolFamilyCatalog = (sources) => {
       surface: "application-workflow",
       contracts: [
         ...sources.applicationContracts.APPLICATION_TOOL_CONTRACTS,
+        ...sources.swiftContracts.SWIFT_TOOL_CONTRACTS,
+        ...sources.investigationWorkflowContracts
+          .INVESTIGATION_WORKFLOW_TOOL_CONTRACTS,
         ...sources.analysisViewContracts.ANALYSIS_VIEW_TOOL_CONTRACTS,
         ...sources.webScriptContracts.WEB_SCRIPT_TOOL_CONTRACTS,
         ...sources.javascriptRecoveryContracts
@@ -143,6 +146,10 @@ export const providerCatalog = (sources) => {
     activeContracts,
   } = electronContractSlices(sources);
   return [
+    {
+      identity: sources.artifactProviders.SWIFT_SOURCE_PROVIDER,
+      contracts: sources.swiftContracts.SWIFT_TOOL_CONTRACTS,
+    },
     {
       identity: sources.hopperProvider.HOPPER_PROVIDER_IDENTITY,
       contracts: declaredContracts(

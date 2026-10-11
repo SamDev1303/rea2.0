@@ -9,6 +9,7 @@ import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 it("analyzes direct returns after deep source without exhausting the default process stack", async () => {
   const root = await createTestTempDirectory("rea-deep-direct-returns-");
+  const home = await createTestTempDirectory("rea-fixture-config-home-");
   await writeFile(
     join(root, "app.js"),
     `export function render() { object${".property".repeat(20_000)}; function nested() { return "nested"; } class Inner { method() { return "method"; } } return "ready"; }`,
@@ -30,7 +31,7 @@ it("analyzes direct returns after deep source without exhausting the default pro
       timeout: 10_000,
       // Bound the child heap while retaining Node's default stack size.
       env: {
-        HOME: root,
+        HOME: home,
         TMPDIR: root,
         NODE_OPTIONS: "--max-old-space-size=768",
       },

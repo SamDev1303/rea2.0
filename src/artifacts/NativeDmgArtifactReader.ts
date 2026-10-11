@@ -573,6 +573,7 @@ const verifyFailureReason = (
   );
   switch (diagnostic) {
     case "image not recognized":
+    case "image not recognised":
       return "format";
     case "invalid checksum":
     case "image data corrupted":
