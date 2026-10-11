@@ -1,73 +1,37 @@
-import { basename, isAbsolute, resolve } from "node:path";
-import { valid } from "semver";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { PRODUCT_IDENTITY } from "../identity.js";
+/** Resolve this checkout's launcher; no package runner or upstream fallback. */
+export const localRegistrationCommand = (): readonly string[] => [
+  process.execPath,
+  fileURLToPath(new URL("../../scripts/rea.mjs", import.meta.url)),
+  "mcp",
+];
 
-/** Resolve a pinned npx launcher that stdio clients can spawn on the host. */
+/** Compatibility export for callers compiled against the former helper name. */
 export const npxRegistrationCommand = (
-  platform: NodeJS.Platform = process.platform,
-): readonly string[] => {
-  const command = [
-    "npx",
-    "-y",
-    PRODUCT_IDENTITY.registrationPackageSpecifier,
-    "mcp",
-  ];
-  return platform === "win32" ? ["cmd.exe", "/d", "/c", ...command] : command;
-};
+  _platform: NodeJS.Platform = process.platform,
+): readonly string[] => localRegistrationCommand();
 
-const unwrapNpxCommand = (command: readonly string[]): readonly string[] => {
-  const executable = command[0]?.toLowerCase();
-  if (executable !== "cmd" && executable !== "cmd.exe") return command;
-  if (command[1]?.toLowerCase() === "/c") return command.slice(2);
-  if (command[1]?.toLowerCase() === "/d" && command[2]?.toLowerCase() === "/c")
-    return command.slice(3);
-  return [];
-};
-
-/** Check that one parsed command points to REA's MCP entry point. */
+/** Ownership requires the exact Node executable and exact checkout entry point. */
 export const isOwnedClientRegistrationCommand = (
   command: readonly string[],
-  currentCommandPath: string = resolve(process.argv[1] ?? "unknown"),
+  currentCommandPath: string = localRegistrationCommand()[1]!,
 ): boolean => {
-  if (
-    command.length === 3 &&
-    command[2] === "mcp" &&
-    resolve(command[0] ?? "") === resolve(process.execPath) &&
-    resolve(command[1] ?? "") === currentCommandPath
-  )
-    return true;
-
-  if (command.length === 2 && command[1] === "mcp") {
-    const executable = command[0] ?? "";
-    if (
-      executable === PRODUCT_IDENTITY.cliBinary ||
-      (isAbsolute(executable) &&
-        basename(executable) === PRODUCT_IDENTITY.cliBinary) ||
-      resolve(executable) === currentCommandPath
-    )
-      return true;
-  }
-
-  const npxCommand = unwrapNpxCommand(command);
-  if (
-    npxCommand.length !== 4 ||
-    npxCommand[0] !== "npx" ||
-    npxCommand[1] !== "-y" ||
-    npxCommand[3] !== "mcp"
-  )
-    return false;
-
-  const packageReference = npxCommand[2] ?? "";
-  if (
-    packageReference === PRODUCT_IDENTITY.packageName ||
-    packageReference === PRODUCT_IDENTITY.packageSpecifier ||
-    packageReference === PRODUCT_IDENTITY.registrationPackageSpecifier
-  )
-    return true;
-  const versionPrefix = `${PRODUCT_IDENTITY.packageName}@`;
+  if (command.length !== 3 || command[2] !== "mcp") return false;
   return (
-    packageReference.startsWith(versionPrefix) &&
-    valid(packageReference.slice(versionPrefix.length)) !== null
+    resolve(command[0] ?? "") === resolve(process.execPath) &&
+    resolve(command[1] ?? "") === resolve(currentCommandPath)
   );
+};
+
+/** Display-only shell command; persistent clients use the structured argument array. */
+export const localRegistrationDisplayCommand = (
+  platform: NodeJS.Platform = process.platform,
+): string => {
+  const quote = (value: string): string =>
+    platform === "win32"
+      ? `'${value.replaceAll("'", "''")}'`
+      : `'${value.replaceAll("'", `'"'"'`)}'`;
+  return `${platform === "win32" ? "& " : ""}${localRegistrationCommand().map(quote).join(" ")}`;
 };

@@ -1,5 +1,6 @@
+import { isPathWithinRoot } from "../domain/localPath.js";
 import fs from "node:fs";
-import { lstat } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { err, ok, type Result } from "../domain/result.js";
 import type { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.js";
@@ -80,7 +81,15 @@ const resolveSourceHead = async (
   const cleanupFailures: ArtifactReaderFailure[] = [];
   const readMetadataBytes = async (path: string): Promise<Buffer> => {
     try {
-      return await readRegularFile(path, { signal });
+      const canonical = await realpath(path);
+      if (!isPathWithinRoot(root, canonical) || canonical !== resolve(path))
+        throw new Error("Git metadata escapes the admitted source root");
+      return await readRegularFile(path, {
+        signal,
+        symlinks: "reject",
+        hardlinks: "reject",
+        maxBytes: 1024 * 1024,
+      });
     } catch (cause: unknown) {
       if (!(cause instanceof RegularFileCleanupFailure)) throw cause;
       const retry = await retryRegularFileCleanup(cause, resources);
@@ -198,6 +207,10 @@ const resolveSourceHead = async (
   if (!pointer.startsWith("gitdir: ") || pointer.length === 8)
     throw new Error("Invalid Git directory pointer");
   const gitdir = resolve(root, pointer.slice(8));
+  if (!isPathWithinRoot(root, gitdir))
+    throw new Error(
+      "External Git metadata is unavailable for untrusted reference roots",
+    );
   let commonDirectory: string;
   try {
     commonDirectory = resolve(
@@ -211,6 +224,8 @@ const resolveSourceHead = async (
     if (errorCode(cause) !== "ENOENT") throw cause;
     return readRef({ gitdir, ref: "HEAD" });
   }
+  if (!isPathWithinRoot(root, commonDirectory))
+    throw new Error("External Git common directory is unavailable");
   const head = (await readMetadataText(join(gitdir, "HEAD"))).trim();
   if (!head.startsWith("ref: ")) return readRef({ gitdir, ref: "HEAD" });
   const ref = head.slice(5);

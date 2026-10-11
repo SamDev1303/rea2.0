@@ -345,7 +345,7 @@ describe("guided prompt completion lifecycle", () => {
     expect(calls).toBe(2);
   });
 
-  it("refreshes wire completions across open, switch, concurrency, and close", async () => {
+  it("refreshes wire completions across controller open, switch, concurrency, and MCP close", async () => {
     const directory = await createTestTempDirectory("rea-prompt-mcp-");
     temporaryDirectories.push(directory);
     const first = join(directory, "first.hop");
@@ -359,11 +359,13 @@ describe("guided prompt completion lifecycle", () => {
     resources.push(session);
 
     expect(await complete(client, "document", "")).toEqual([]);
-    const opened = await client.callTool({
+    const denied = await client.callTool({
       name: "open_binary",
       arguments: { path: first },
     });
-    expect(opened).not.toMatchObject({ isError: true });
+    expect(denied.isError).toBe(true);
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await session.open(first)).ok).toBe(true);
     expect(await complete(client, "document", "first")).toEqual([
       "first-document",
     ]);
@@ -377,14 +379,7 @@ describe("guided prompt completion lifecycle", () => {
       Array.from({ length: 16 }, () => complete(client, "procedure", "0x")),
     );
     expect(concurrent.every((values) => values[0] === "0x1000")).toBe(true);
-    expect(
-      (
-        await client.callTool({
-          name: "open_binary",
-          arguments: { path: second },
-        })
-      ).isError,
-    ).not.toBe(true);
+    expect((await session.open(second)).ok).toBe(true);
     expect(await complete(client, "document", "first")).toEqual([]);
     expect(await complete(client, "document", "second")).toEqual([
       "second-document",

@@ -1,7 +1,3 @@
-import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { expect, onTestFinished } from "vitest";
 import { z } from "zod";
@@ -13,8 +9,19 @@ import { parseProcessCapture } from "../../../src/domain/process/processCaptureP
 import { silentLogger } from "../../../src/logger.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
-import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
-import { itWithCaptureCapability } from "./processCaptureCapability.js";
+import { CAPTURE_SKIP_REASON } from "./processCaptureCapability.js";
+import {
+  processTest,
+  type TestProcesses,
+} from "../../support/process/processFixture.js";
+import { spawnOwnedCliFixture } from "../../support/investigation/ownedCliFixture.js";
+import {
+  attachOwnedTimedMcpFixture,
+  prepareOwnedTimedProcessFixture,
+} from "../../support/investigation/ownedTimedProcessFixture.js";
+
+const captureTest = processTest.skipIf(CAPTURE_SKIP_REASON);
+type TimedFixture = Awaited<ReturnType<typeof prepareOwnedTimedProcessFixture>>;
 
 const PROGRESS_INTERVAL_MS = 100;
 
@@ -87,25 +94,18 @@ interface CliCapture {
   }[];
 }
 
-const writeScenario = async (
-  prefix: string,
-  scenario: Readonly<Record<string, unknown>>,
-): Promise<string> => {
-  const root = await createTestTempDirectory(prefix);
-  const path = join(root, "scenario.json");
-  await writeFile(path, JSON.stringify(scenario));
-  return path;
-};
-
 const runCaptureCli = async (
-  scenarioPath: string,
+  processes: TestProcesses,
+  fixture: TimedFixture,
   options: { readonly stopOnRunning?: boolean } = {},
 ): Promise<CliCapture> => {
-  const child = spawn(
-    process.execPath,
-    ["scripts/rea.mjs", "capture-process", scenarioPath, "--json"],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const child = await spawnOwnedCliFixture(processes, {
+    policy: fixture.policy,
+    arguments: ["capture-process", fixture.scenario, "--json"],
+    cwd: fixture.root,
+    timeoutMs: 20000,
+  });
+  child.stdin.end();
   let stdout = "";
   let stderr = "";
   let pending = "";
@@ -191,9 +191,8 @@ const assertRateBound = (
   );
 };
 
-const childScript = (source: string) => ["-e", source];
-
 const connectProgressClient = async (
+  fixture: TimedFixture,
   recordNotifications = false,
 ): Promise<{
   readonly client: Client;
@@ -204,8 +203,9 @@ const connectProgressClient = async (
   });
   const server = createServer(
     { kind: "session", session },
-    { logger: silentLogger },
+    { logger: silentLogger, environment: {} },
   );
+  await attachOwnedTimedMcpFixture(server, fixture);
   const client = new Client({
     name: "process-capture-progress",
     version: "1",
@@ -226,22 +226,25 @@ const connectProgressClient = async (
   return { client, notifications };
 };
 
-itWithCaptureCapability(
+captureTest(
   "keeps capture Evidence on stdout and live status on stderr for a sparse child",
-  async () => {
-    const scenario = await writeScenario("rea-process-progress-sparse-", {
-      executable: process.execPath,
-      arguments: childScript(
+  async ({ processes }) => {
+    const fixture = await prepareOwnedTimedProcessFixture({
+      adapter: "cli",
+      source:
         "process.stdout.write('SPARSE_CHILD_STARTED\\n'); setTimeout(() => process.stdout.write('SPARSE_CHILD_DONE\\n'), 1600);",
-      ),
-      timeout_ms: 10_000,
-      idle_timeout_ms: 10_000,
+      timeoutMs: 10000,
+      idleTimeoutMs: 10000,
     });
-    const capture = await runCaptureCli(scenario);
+    const capture = await runCaptureCli(processes, fixture);
     expect(capture.exitCode, capture.stderr).toBe(0);
     expect(capture.stdout).not.toContain("rea_progress");
     const evidence = parseEvidence(JSON.parse(capture.stdout));
     const recorded = parseProcessCapture(evidence.normalized_result);
+    expect(recorded.manifest.scenario.arguments).toEqual([
+      "--max-old-space-size=64",
+      fixture.input.arguments[1],
+    ]);
     expect(evidence).toMatchObject({
       operation: "capture_process_scenario",
       predicate_type: "rea.process-capture",
@@ -274,21 +277,25 @@ itWithCaptureCapability(
   30_000,
 );
 
-itWithCaptureCapability(
+captureTest(
   "bounds stderr progress while a busy child emits many output chunks",
-  async () => {
-    const scenario = await writeScenario("rea-process-progress-busy-", {
-      executable: process.execPath,
-      arguments: childScript(
-        "let count = 0; const timer = setInterval(() => { process.stdout.write('BUSY_CHILD_LINE\\n'); count += 1; if (count >= 50) clearInterval(timer); }, 12);",
-      ),
-      timeout_ms: 10_000,
-      idle_timeout_ms: 10_000,
+  async ({ processes }) => {
+    const fixture = await prepareOwnedTimedProcessFixture({
+      adapter: "cli",
+      // Keep repeated output and duration without mutable callback state.
+      source:
+        "const timer=setInterval(() => process.stdout.write('BUSY_CHILD_LINE\\n'),12);setTimeout(() => clearInterval(timer),700);",
+      timeoutMs: 10000,
+      idleTimeoutMs: 10000,
     });
-    const capture = await runCaptureCli(scenario);
+    const capture = await runCaptureCli(processes, fixture);
     expect(capture.exitCode, capture.stderr).toBe(0);
     const evidence = parseEvidence(JSON.parse(capture.stdout));
     const recorded = parseProcessCapture(evidence.normalized_result);
+    expect(recorded.manifest.scenario.arguments).toEqual([
+      "--max-old-space-size=64",
+      fixture.input.arguments[1],
+    ]);
     const occurrences =
       recorded.frames
         .map(({ data }) => data)
@@ -314,19 +321,23 @@ itWithCaptureCapability(
   30_000,
 );
 
-itWithCaptureCapability(
+captureTest(
   "reports timeout cleanup on stderr without changing Evidence shape",
-  async () => {
-    const scenario = await writeScenario("rea-process-progress-timeout-", {
-      executable: process.execPath,
-      arguments: childScript("setInterval(() => undefined, 1000);"),
-      timeout_ms: 700,
-      idle_timeout_ms: 10_000,
+  async ({ processes }) => {
+    const fixture = await prepareOwnedTimedProcessFixture({
+      adapter: "cli",
+      source: "setInterval(() => undefined,1000);",
+      timeoutMs: 700,
+      idleTimeoutMs: 10000,
     });
-    const capture = await runCaptureCli(scenario);
+    const capture = await runCaptureCli(processes, fixture);
     expect(capture.exitCode, capture.stderr).toBe(0);
     const evidence = parseEvidence(JSON.parse(capture.stdout));
     const recorded = parseProcessCapture(evidence.normalized_result);
+    expect(recorded.manifest.scenario.arguments).toEqual([
+      "--max-old-space-size=64",
+      fixture.input.arguments[1],
+    ]);
     expect(recorded.exit.reason).toBe("timeout");
     expect(capture.stdout).not.toContain("rea_progress");
     const updates = capture.lines.map(({ update }) => update);
@@ -343,16 +354,18 @@ itWithCaptureCapability(
   30_000,
 );
 
-itWithCaptureCapability(
+captureTest(
   "reports cleanup status on stderr when capture is cancelled",
-  async () => {
-    const scenario = await writeScenario("rea-process-progress-cancel-", {
-      executable: process.execPath,
-      arguments: childScript("setInterval(() => undefined, 1000);"),
-      timeout_ms: 15_000,
-      idle_timeout_ms: 15_000,
+  async ({ processes }) => {
+    const fixture = await prepareOwnedTimedProcessFixture({
+      adapter: "cli",
+      source: "setInterval(() => undefined,1000);",
+      timeoutMs: 15000,
+      idleTimeoutMs: 15000,
     });
-    const capture = await runCaptureCli(scenario, { stopOnRunning: true });
+    const capture = await runCaptureCli(processes, fixture, {
+      stopOnRunning: true,
+    });
     expect(capture.exitCode).toBe(130);
     expect(
       analysisCliErrorEnvelopeSchema.parse(JSON.parse(capture.stdout)),
@@ -375,26 +388,38 @@ itWithCaptureCapability(
   30_000,
 );
 
-itWithCaptureCapability(
+captureTest(
   "forwards live capture progress only when the MCP client supplies a token",
   async () => {
-    const silentClient = await connectProgressClient(true);
-    const { client: tokenClient } = await connectProgressClient();
+    const silentFixture = await prepareOwnedTimedProcessFixture({
+      adapter: "mcp",
+      source: "process.stdout.write('SILENT_CHILD_OK\\n');",
+      timeoutMs: 10000,
+      idleTimeoutMs: 10000,
+    });
+    const tokenFixture = await prepareOwnedTimedProcessFixture({
+      adapter: "mcp",
+      source:
+        "process.stdout.write('TOKEN_CHILD_STARTED\\n');setTimeout(() => process.stdout.write('TOKEN_CHILD_DONE\\n'),1200);",
+      timeoutMs: 10000,
+      idleTimeoutMs: 10000,
+    });
+    const silentClient = await connectProgressClient(silentFixture, true);
+    const { client: tokenClient } = await connectProgressClient(tokenFixture);
     const { notifications } = silentClient;
     const silent = await silentClient.client.callTool({
       name: "capture_process_scenario",
-      arguments: {
-        executable: process.execPath,
-        arguments: childScript("process.stdout.write('SILENT_CHILD_OK\\n');"),
-        timeout_ms: 10_000,
-        idle_timeout_ms: 10_000,
-      },
+      arguments: silentFixture.input,
     });
     expect(silent.isError, JSON.stringify(silent)).not.toBe(true);
     expect(notifications).toEqual([]);
     const evidence = toolContract(
       "capture_process_scenario",
     ).outputSchema.parse(silent.structuredContent);
+    expect(evidence.normalized_result.manifest.scenario.arguments).toEqual([
+      "--max-old-space-size=64",
+      silentFixture.input.arguments[1],
+    ]);
     expect(
       evidence.normalized_result.frames.map((frame) => frame.data).join(""),
     ).toContain("SILENT_CHILD_OK");
@@ -407,14 +432,7 @@ itWithCaptureCapability(
     const captured = await tokenClient.callTool(
       {
         name: "capture_process_scenario",
-        arguments: {
-          executable: process.execPath,
-          arguments: childScript(
-            "process.stdout.write('TOKEN_CHILD_STARTED\\n'); setTimeout(() => process.stdout.write('TOKEN_CHILD_DONE\\n'), 1200);",
-          ),
-          timeout_ms: 10_000,
-          idle_timeout_ms: 10_000,
-        },
+        arguments: tokenFixture.input,
       },
       {
         onprogress: (update) => {
@@ -452,6 +470,9 @@ itWithCaptureCapability(
     const tokenEvidence = toolContract(
       "capture_process_scenario",
     ).outputSchema.parse(captured.structuredContent);
+    expect(tokenEvidence.normalized_result.manifest.scenario.arguments).toEqual(
+      ["--max-old-space-size=64", tokenFixture.input.arguments[1]],
+    );
     expect(
       tokenEvidence.normalized_result.frames
         .map((frame) => frame.data)
@@ -461,10 +482,16 @@ itWithCaptureCapability(
   30_000,
 );
 
-itWithCaptureCapability(
+captureTest(
   "reports timeout and cancellation cleanup through MCP progress",
   async () => {
-    const { client } = await connectProgressClient();
+    const timeoutFixture = await prepareOwnedTimedProcessFixture({
+      adapter: "mcp",
+      source: "setInterval(() => undefined,1000);",
+      timeoutMs: 600,
+      idleTimeoutMs: 10000,
+    });
+    const { client } = await connectProgressClient(timeoutFixture);
     const timeoutProgress: Array<{
       readonly message: string | undefined;
       readonly total: number | undefined;
@@ -472,12 +499,7 @@ itWithCaptureCapability(
     const timedOut = await client.callTool(
       {
         name: "capture_process_scenario",
-        arguments: {
-          executable: process.execPath,
-          arguments: childScript("setInterval(() => undefined, 1000);"),
-          timeout_ms: 600,
-          idle_timeout_ms: 10_000,
-        },
+        arguments: timeoutFixture.input,
       },
       {
         onprogress: (update) => {
@@ -492,6 +514,9 @@ itWithCaptureCapability(
     const timedOutEvidence = toolContract(
       "capture_process_scenario",
     ).outputSchema.parse(timedOut.structuredContent);
+    expect(
+      timedOutEvidence.normalized_result.manifest.scenario.arguments,
+    ).toEqual(["--max-old-space-size=64", timeoutFixture.input.arguments[1]]);
     expect(timedOutEvidence.normalized_result.exit.reason).toBe("timeout");
     expect(timeoutProgress.every(({ total }) => total === undefined)).toBe(
       true,
@@ -501,7 +526,13 @@ itWithCaptureCapability(
       "owned_process_group=cleaned",
     );
 
-    const cancelling = await connectProgressClient(true);
+    const cancellingFixture = await prepareOwnedTimedProcessFixture({
+      adapter: "mcp",
+      source: "setInterval(() => undefined,1000);",
+      timeoutMs: 15000,
+      idleTimeoutMs: 15000,
+    });
+    const cancelling = await connectProgressClient(cancellingFixture, true);
     // Prepare the SDK's full output-schema cache before timing capture control.
     await cancelling.client.callTool({ name: "binary_session", arguments: {} });
     const controller = new AbortController();
@@ -510,12 +541,7 @@ itWithCaptureCapability(
     const call = cancelling.client.callTool(
       {
         name: "capture_process_scenario",
-        arguments: {
-          executable: process.execPath,
-          arguments: childScript("setInterval(() => undefined, 1000);"),
-          timeout_ms: 15_000,
-          idle_timeout_ms: 15_000,
-        },
+        arguments: cancellingFixture.input,
         _meta: { progressToken: "capture-cancel" },
       },
       { signal: controller.signal },

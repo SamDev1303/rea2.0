@@ -9,7 +9,7 @@
  */
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 
 const targetPath = process.argv[2];
 if (!targetPath) {
@@ -29,25 +29,20 @@ const env = {
 };
 if (loaderArgs) env.HOPPER_LOADER_ARGS_JSON = loaderArgs;
 
+const root = fileURLToPath(new URL("..", import.meta.url));
+try {
+  await access(resolve(root, "dist/main.js"));
+} catch {
+  process.stderr.write(
+    "REA 2.0 local build is missing; run npm run build:cached. No upstream fallback.\n",
+  );
+  process.exit(1);
+}
 const config = {
   mcpServers: {
-    rea: {
-      command: "npx",
-      args: [
-        "-y",
-        `${
-          JSON.parse(
-            await readFile(
-              resolve(
-                fileURLToPath(new URL("..", import.meta.url)),
-                "package.json",
-              ),
-              "utf8",
-            ),
-          ).name
-        }@latest`,
-        "mcp",
-      ],
+    rea2: {
+      command: process.execPath,
+      args: [resolve(root, "scripts/rea.mjs"), "mcp"],
       env,
     },
   },

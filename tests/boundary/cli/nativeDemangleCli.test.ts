@@ -5,6 +5,7 @@ import { describe, expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { demangleSyntheticSymbols } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const environment = {
   REA_LOG_LEVEL: "silent",
@@ -22,19 +23,27 @@ describe.skipIf(process.platform !== "darwin")(
   "native Swift demangling CLI with line-terminator characters",
   () => {
     cliTest("keeps a carriage return in the symbol", async ({ cli }) => {
+      const path = await evidenceTarget();
       const result = await cli.run({
         arguments: [
           "demangle-swift",
-          await evidenceTarget(),
+          path,
           "$s4main3FooV",
           "carriage\r",
           "--json",
         ],
         environment,
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.json).toMatchObject({
-        normalized_result: {
+      expect(result.exitCode).toBe(1);
+      expect(result.json).toMatchObject({ code: "capability_unavailable" });
+      const inspected = await demangleSyntheticSymbols(path, [
+        "$s4main3FooV",
+        "carriage\r",
+      ]);
+      expect(inspected.ok).toBe(true);
+      if (!inspected.ok) throw inspected.error;
+      expect(inspected.value).toMatchObject({
+        result: {
           symbols: [
             { input: "$s4main3FooV", output: "main.Foo", status: "demangled" },
             { input: "carriage\r", output: "carriage\r", status: "unchanged" },

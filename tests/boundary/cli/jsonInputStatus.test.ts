@@ -5,6 +5,50 @@ import { describe, expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import type { TestProcesses } from "../../support/process/processFixture.js";
+
+/** Compiled parser/logger proof with a read port restricted to this authored fixture. */
+const runFixtureParser = async (
+  processes: TestProcesses,
+  root: string,
+  input: string,
+  operation: string,
+) => {
+  const parserUrl = new URL("../../../dist/cliJsonInput.js", import.meta.url)
+    .href;
+  const loggerUrl = new URL("../../../dist/cliLogging.js", import.meta.url)
+    .href;
+  const silentUrl = new URL("../../../dist/logger.js", import.meta.url).href;
+  const result = await processes.run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import { readFile } from "node:fs/promises";
+    import { resolve, relative, isAbsolute } from "node:path";
+    import { parseCliJsonInputUsingReader } from ${JSON.stringify(parserUrl)};
+    import { logCliCommand } from ${JSON.stringify(loggerUrl)};
+    import { silentLogger } from ${JSON.stringify(silentUrl)};
+    const fixtureRoot = process.argv[1];
+    const operation = process.argv[3];
+    const parsed = await parseCliJsonInputUsingReader(process.argv[2], operation, async (path) => {
+      const selected = resolve(path);
+      const within = relative(fixtureRoot, selected);
+      if (within === ".." || within.startsWith("../") || isAbsolute(within)) throw new Error("Outside synthetic fixture");
+      return { ok: true, value: JSON.parse(await readFile(selected, "utf8")) };
+    });
+    const output = await logCliCommand(silentLogger, operation, async () => parsed.ok ? parsed.value : parsed.error);
+    console.log(JSON.stringify(output));
+  `,
+      root,
+      input,
+      operation,
+    ],
+    { cwd: root, env: {} },
+  );
+  return { ...result, json: JSON.parse(result.stdout.trim()) as unknown };
+};
 
 const JSON_COMMANDS = [
   ["inspect-analysis-view", "inspect-analysis-view"],
@@ -32,10 +76,10 @@ describe("compiled CLI JSON input failure status", () => {
   for (const [command, operation] of JSON_COMMANDS)
     cliTest(
       `${command} rejects malformed inline input before dispatch`,
-      async ({ cli }) => {
+      async ({ cli, processes }) => {
         const root = await createTestTempDirectory("rea-cli-json-status-");
         const input = "{";
-        const result = await cli.run({
+        let result = await cli.run({
           arguments: [command, input, "--json"],
           environment: {
             HOME: root,
@@ -43,6 +87,15 @@ describe("compiled CLI JSON input failure status", () => {
             XDG_CACHE_HOME: root,
           },
         });
+
+        if (
+          command === "capture-browser-scenario" ||
+          command === "capture-electron-scenario"
+        ) {
+          expect(result.json).toMatchObject({ code: "capability_unavailable" });
+          expect(result.exitCode).toBe(1);
+          result = await runFixtureParser(processes, root, input, operation);
+        }
 
         expect(result.json).toMatchObject({
           code: "invalid_request",
@@ -141,10 +194,10 @@ describe("compiled CLI JSON input diagnostic preservation", () => {
 
   cliTest(
     "classifies an overlong malformed inline value before dispatch",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const root = await createTestTempDirectory("rea-cli-json-overlong-");
       const input = `[${"x".repeat(3_000)}`;
-      const result = await cli.run({
+      const denied = await cli.run({
         arguments: ["compare-javascript-export-shapes", input, "--json"],
         environment: {
           HOME: root,
@@ -152,6 +205,13 @@ describe("compiled CLI JSON input diagnostic preservation", () => {
           XDG_CACHE_HOME: root,
         },
       });
+      expect(denied.exitCode).toBe(1);
+      const result = await runFixtureParser(
+        processes,
+        root,
+        input,
+        "compare-javascript-export-shapes",
+      );
 
       expect(result.json).toMatchObject({
         code: "invalid_request",
@@ -170,10 +230,10 @@ describe("compiled CLI JSON input diagnostic preservation", () => {
 
   cliTest(
     "preserves explicit overlong JSON path diagnostics",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const root = await createTestTempDirectory("rea-cli-json-overlong-path-");
       const input = `[${"x".repeat(3_000)}.json`;
-      const result = await cli.run({
+      const denied = await cli.run({
         arguments: ["compare-javascript-export-shapes", input, "--json"],
         environment: {
           HOME: root,
@@ -181,6 +241,13 @@ describe("compiled CLI JSON input diagnostic preservation", () => {
           XDG_CACHE_HOME: root,
         },
       });
+      expect(denied.exitCode).toBe(1);
+      const result = await runFixtureParser(
+        processes,
+        root,
+        input,
+        "compare-javascript-export-shapes",
+      );
 
       expect(result.json).toMatchObject({
         code: "invalid_request",
@@ -195,11 +262,11 @@ describe("compiled CLI JSON input diagnostic preservation", () => {
 describe("compiled CLI JSON path ambiguity", () => {
   cliTest(
     "classifies malformed inline JSON when a path prefix is a regular file",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const root = await createTestTempDirectory("rea-cli-json-not-dir-");
       await writeFile(join(root, "[prefix"), "regular file");
       const input = "[prefix/rest";
-      const result = await cli.run({
+      const denied = await cli.run({
         arguments: ["capture-browser-scenario", input, "--json"],
         cwd: root,
         environment: {
@@ -208,6 +275,13 @@ describe("compiled CLI JSON path ambiguity", () => {
           XDG_CACHE_HOME: root,
         },
       });
+      expect(denied.json).toMatchObject({ code: "capability_unavailable" });
+      const result = await runFixtureParser(
+        processes,
+        root,
+        input,
+        "capture_browser_scenario",
+      );
 
       expect(result.json).toMatchObject({
         code: "invalid_request",
@@ -226,7 +300,7 @@ describe("compiled CLI JSON path ambiguity", () => {
 
   cliTest.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "preserves permission errors for malformed path-like JSON input",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const root = await createTestTempDirectory("rea-cli-json-denied-");
       const denied = join(root, "[locked");
       const input = "[locked/rest";
@@ -236,7 +310,7 @@ describe("compiled CLI JSON path ambiguity", () => {
         await expect(readFile(join(root, input))).rejects.toMatchObject({
           code: "EACCES",
         });
-        const result = await cli.run({
+        const deniedResult = await cli.run({
           arguments: ["capture-browser-scenario", input, "--json"],
           cwd: root,
           environment: {
@@ -245,6 +319,15 @@ describe("compiled CLI JSON path ambiguity", () => {
             XDG_CACHE_HOME: root,
           },
         });
+        expect(deniedResult.json).toMatchObject({
+          code: "capability_unavailable",
+        });
+        const result = await runFixtureParser(
+          processes,
+          root,
+          input,
+          "capture_browser_scenario",
+        );
 
         expect(result.json).toMatchObject({
           code: "access_denied",

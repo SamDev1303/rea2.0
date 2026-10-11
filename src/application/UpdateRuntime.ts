@@ -179,6 +179,7 @@ export const systemUpdateHost = (
   home: string | undefined = undefined,
   environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): UpdateHost => ({
+  localBuild: true,
   installation: () =>
     detectNpmInstallation(packageRoot, {
       canonicalPath: realpath,

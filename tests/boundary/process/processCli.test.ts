@@ -5,10 +5,16 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
+import {
+  prepareOwnedProcessController,
+  captureOwnedProcessCli,
+} from "../../support/process/ownedProcessController.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { runOwnedCliFixture } from "../../support/investigation/ownedCliFixture.js";
+import { prepareOwnedProcessCliFixture } from "../../support/investigation/ownedProcessCliFixture.js";
 
 import {
   captureProcessScenarioFile,
@@ -26,7 +32,7 @@ const CLI_INTEGRATION_TIMEOUT_MS = 60_000;
 describe("documented process CLI workflow", () => {
   cliTest(
     "feeds the documented JSON capture into the comparison CLI",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const root = await createTestTempDirectory("rea-process-cli-");
       const guide = await readFile(
         new URL("../../../docs/process-capture.md", import.meta.url),
@@ -43,15 +49,14 @@ describe("documented process CLI workflow", () => {
       const args = argumentsText.split(/\s+/u);
       const input = args[0];
       if (input === undefined) throw new Error("Missing scenario path");
-      await writeFile(
-        join(root, input),
-        JSON.stringify({
-          executable: process.execPath,
-          arguments: ["-e", "process.stdout.write('documented-capture')"],
-        }),
-      );
-      const capture = await cli.run({
-        arguments: ["capture-process", ...args],
+      const { policy, scenario } = await prepareOwnedProcessCliFixture({
+        root,
+        scenarioFileName: input.replace(/^\.\//u, ""),
+        source: "process.stdout.write('documented-capture');",
+      });
+      const capture = await runOwnedCliFixture(processes, {
+        policy,
+        arguments: ["capture-process", scenario, ...args.slice(1)],
         cwd: root,
       });
       expect(capture.exitCode, capture.stdout || capture.stderr).toBe(0);
@@ -78,6 +83,14 @@ describe("process CLI errors", () => {
   it(
     "exits unsuccessfully without writing failure-shaped evidence",
     async () => {
+      // The maintained diagnostic service retains its input-error contract;
+      // the public launcher separately refuses runtime dispatch.
+      expect(
+        await captureProcessScenarioFile("/missing/scenario.json", {}),
+      ).toMatchObject({
+        category: "invalid_input",
+        error: "Process command failed",
+      });
       await expect(
         execFileAsync(
           process.execPath,
@@ -86,7 +99,7 @@ describe("process CLI errors", () => {
         ),
       ).rejects.toMatchObject({
         code: 1,
-        stdout: expect.stringContaining("category: invalid_input"),
+        stdout: expect.stringContaining("capability_unavailable"),
       });
     },
     CLI_INTEGRATION_TIMEOUT_MS,
@@ -178,15 +191,12 @@ describe("process CLI evidence validation", () => {
 
   it("captures the minimal executable-and-arguments scenario", async () => {
     const root = await createTestTempDirectory("rea-process-cli-");
-    const scenario = join(root, "scenario.json");
-    await writeFile(
-      scenario,
-      JSON.stringify({
-        executable: process.execPath,
-        arguments: ["-e", "process.stdout.write('minimal-capture')"],
-      }),
-    );
-    const evidence = await captureProcessScenarioFile(scenario);
+    const controller = await prepareOwnedProcessController({
+      template: "minimal",
+      root,
+    });
+    onTestFinished(controller.dispose);
+    const evidence = await captureOwnedProcessCli(controller);
     expect(evidence).toMatchObject({
       predicate_type: "rea.process-capture",
       operation: "capture_process_scenario",

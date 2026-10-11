@@ -56,10 +56,13 @@ describe("executable dispatcher", () => {
         adapter: "mcp-doctor",
         args: ["--json"],
       });
-      await expect(invoke(["mcp", "add"])).resolves.toEqual({
-        adapter: "cli",
-        args: ["mcp", "add"],
-      });
+      const registration = await processes.run(
+        process.execPath,
+        [join(scripts, "rea.mjs"), "mcp", "add"],
+        { cwd: workspace.root },
+      );
+      expect(registration.exitCode).toBe(1);
+      expect(registration.stderr).toContain("disables SDK mcp add");
       await expect(invoke(["--mcp", "extra"])).resolves.toEqual({
         adapter: "cli",
         args: ["--mcp", "extra"],
@@ -88,12 +91,10 @@ describe("executable dispatcher", () => {
         expect(result).toMatchObject({
           exitCode: 1,
           stderr: expect.stringContaining(
-            "REA's compiled runtime is missing. Run `npm ci && npm run build:cached` in",
+            "REA 2.0's local compiled runtime is missing. Run `npm ci --ignore-scripts && npm run build:cached` in",
           ),
         });
-        expect(result.stderr).toContain(
-          "If this is an installed package, reinstall rea-agents.",
-        );
+        expect(result.stderr).toContain("There is no upstream fallback.");
         expect(result).toMatchObject({
           stderr: expect.not.stringContaining("ERR_MODULE_NOT_FOUND"),
         });

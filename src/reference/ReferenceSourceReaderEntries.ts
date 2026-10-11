@@ -196,6 +196,13 @@ const processEntry = async (
   directories: PendingDirectory[],
 ): Promise<ReferenceSourceResult<undefined>> => {
   if (isAborted(state.signal)) return { ok: false, error: cancelled() };
+  if (++state.visitedEntries > 10000 || performance.now() > state.deadline)
+    return err(
+      failure(
+        "io",
+        "Reference traversal exceeded its entry or time budget; coverage is partial",
+      ),
+    );
   const absolute = join(current.path, name);
   const path = pathFromRoot(state.root, absolute);
   const metadata = await readMetadata(absolute);
@@ -249,6 +256,27 @@ const processFileEntry = async (
   path: string,
   metadata: BigIntStats,
 ): Promise<ReferenceSourceResult<undefined>> => {
+  if (
+    metadata.size > 8n * 1024n * 1024n ||
+    metadata.size + BigInt(state.bytesRead) > 64n * 1024n * 1024n
+  )
+    return err(
+      failure(
+        "io",
+        "Reference source exceeded the per-file or aggregate byte budget; coverage is partial",
+      ),
+    );
+  if (metadata.nlink > 1n) {
+    state.entries.push(
+      entryFailure(
+        path,
+        "file",
+        "unsupported",
+        "Multi-link inputs are outside protected investigation scope",
+      ),
+    );
+    return ok(undefined);
+  }
   const result = await readStableFile({
     resources: state.resources,
     root: state.root,

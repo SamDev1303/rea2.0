@@ -21,32 +21,39 @@ import { observed as ok } from "../../fixtures/analysisExecution.js";
 afterEach(closeEnhancedToolResources);
 
 it("discovers declarations without counting duplicates or compiler bookkeeping", async () => {
-  const client = await connect({
-    execute: (name) => {
-      expect(name).toBe("list_names");
-      return Promise.resolve(
-        ok([
-          { address: "0x1", value: "_OBJC_CLASS_$_First" },
-          { address: "0x2", value: "_OBJC_CLASS_$_Last" },
-          { address: "0x3", value: "_OBJC_CLASS_$_First" },
-          { address: "0x4", value: "__OBJC_CLASS_RO_$_First" },
-          { address: "0x5", value: "_OBJC_CLASSLIST_REFERENCES_$_" },
-          { address: "0x6", value: "l_OBJC_CLASS_NAME_" },
-          { address: "0x7", value: "_OBJC_IVAR_$_First.value" },
-          { address: "0x8", value: "_OBJC_METACLASS_$_First" },
-          { address: "0x9", value: "_OBJC_PROP_$_First.value" },
-          { address: "0xa", value: "__OBJC_PROTOCOL_$_Delegate" },
-          { address: "0xb", value: "__OBJC_PROTOCOL_$_Delegate" },
-          { address: "0xc", value: "__OBJC_PROTOCOL_REFERENCE_$_Delegate" },
-          { address: "0xd", value: "_$s4main7ScoringMp" },
-          { address: "0xe", value: "_$s4main7ScoringTL" },
-          { address: "0xf", value: "_$s4main7ScoringP5scoreSiyFTq" },
-          { address: "0x10", value: "l_OBJC_CLASS_Legacy" },
-          { address: "0x11", value: "l_OBJC_CLASS_NAME_.1" },
-        ]),
-      );
+  const client = await connect(
+    {
+      execute: (name) => {
+        expect(name).toBe("list_names");
+        return Promise.resolve(
+          ok([
+            { address: "0x1", value: "_OBJC_CLASS_$_First" },
+            { address: "0x2", value: "_OBJC_CLASS_$_Last" },
+            { address: "0x3", value: "_OBJC_CLASS_$_First" },
+            { address: "0x4", value: "__OBJC_CLASS_RO_$_First" },
+            { address: "0x5", value: "_OBJC_CLASSLIST_REFERENCES_$_" },
+            { address: "0x6", value: "l_OBJC_CLASS_NAME_" },
+            { address: "0x7", value: "_OBJC_IVAR_$_First.value" },
+            { address: "0x8", value: "_OBJC_METACLASS_$_First" },
+            { address: "0x9", value: "_OBJC_PROP_$_First.value" },
+            { address: "0xa", value: "__OBJC_PROTOCOL_$_Delegate" },
+            { address: "0xb", value: "__OBJC_PROTOCOL_$_Delegate" },
+            { address: "0xc", value: "__OBJC_PROTOCOL_REFERENCE_$_Delegate" },
+            { address: "0xd", value: "_$s4main7ScoringMp" },
+            { address: "0xe", value: "_$s4main7ScoringTL" },
+            { address: "0xf", value: "_$s4main7ScoringP5scoreSiyFTq" },
+            { address: "0x10", value: "l_OBJC_CLASS_Legacy" },
+            { address: "0x11", value: "l_OBJC_CLASS_NAME_.1" },
+          ]),
+        );
+      },
     },
-  });
+    [
+      { name: "get_objc_classes", arguments: {} },
+      { name: "get_objc_classes", arguments: { pattern: "First" } },
+      { name: "get_objc_protocols", arguments: {} },
+    ],
+  );
   const result = jsonResult(
     await client.callTool({ name: "get_objc_classes", arguments: {} }),
   );
@@ -84,56 +91,59 @@ it("discovers declarations without counting duplicates or compiler bookkeeping",
 
 describe("enhanced MCP tools", () => {
   it("returns the complete overview inline with exhaustive totals", async () => {
-    const client = await connect({
-      execute: (name) => {
-        switch (name) {
-          case "list_segments":
-            return Promise.resolve(
-              ok([
-                {
-                  name: "__TEXT",
-                  start: "0x1000",
-                  end: "0x1800",
-                  readable: null,
-                  writable: null,
-                  executable: null,
-                },
-                {
-                  name: "__DATA",
-                  start: "0x1800",
-                  end: "0x2000",
-                  readable: null,
-                  writable: null,
-                  executable: null,
-                },
-              ]),
-            );
-          case "current_document":
-            return Promise.resolve(ok("fixture"));
-          case "list_documents":
-            return Promise.resolve(ok(["New Document", "fixture"]));
-          case "list_strings":
-            return Promise.resolve(
-              ok(
-                Array.from({ length: 700 }, (_, index) => ({
-                  address: `0x${(0x30 + index).toString(16)}`,
-                  value: `string-${index}`,
-                })),
-              ),
-            );
-          case "list_procedures": {
-            return Promise.resolve(
-              ok([
-                { address: "0x1", value: "first" },
-                { address: "0x2", value: "last" },
-              ]),
-            );
+    const client = await connect(
+      {
+        execute: (name) => {
+          switch (name) {
+            case "list_segments":
+              return Promise.resolve(
+                ok([
+                  {
+                    name: "__TEXT",
+                    start: "0x1000",
+                    end: "0x1800",
+                    readable: null,
+                    writable: null,
+                    executable: null,
+                  },
+                  {
+                    name: "__DATA",
+                    start: "0x1800",
+                    end: "0x2000",
+                    readable: null,
+                    writable: null,
+                    executable: null,
+                  },
+                ]),
+              );
+            case "current_document":
+              return Promise.resolve(ok("fixture"));
+            case "list_documents":
+              return Promise.resolve(ok(["New Document", "fixture"]));
+            case "list_strings":
+              return Promise.resolve(
+                ok(
+                  Array.from({ length: 700 }, (_, index) => ({
+                    address: `0x${(0x30 + index).toString(16)}`,
+                    value: `string-${index}`,
+                  })),
+                ),
+              );
+            case "list_procedures": {
+              return Promise.resolve(
+                ok([
+                  { address: "0x1", value: "first" },
+                  { address: "0x2", value: "last" },
+                ]),
+              );
+            }
+            default:
+              return Promise.resolve(ok(null));
           }
-          default:
-            return Promise.resolve(ok(null));
-        }
+        },
       },
-    });
+      [{ name: "binary_overview", arguments: {} }],
+    );
     const result = jsonResult(
       await client.callTool({
         name: "binary_overview",
@@ -153,14 +163,17 @@ describe("enhanced MCP tools", () => {
   });
 
   it("rejects paginated provider output", async () => {
-    const client = await connect({
-      execute: () =>
-        Promise.resolve(
-          ok({
-            items: [{ address: "0x1", value: "_TtC5First" }],
-          }),
-        ),
-    });
+    const client = await connect(
+      {
+        execute: () =>
+          Promise.resolve(
+            ok({
+              items: [{ address: "0x1", value: "_TtC5First" }],
+            }),
+          ),
+      },
+      [{ name: "analyze_swift_types", arguments: {} }],
+    );
     const result = await client.callTool({
       name: "analyze_swift_types",
       arguments: {},
@@ -173,22 +186,25 @@ describe("enhanced MCP tools", () => {
   });
 
   it("rejects a segment with omitted coordinates instead of reporting zero length", async () => {
-    const client = await connect({
-      execute: (name) =>
-        Promise.resolve(
-          name === "list_segments"
-            ? ok([
-                {
-                  name: "__TEXT",
-                  end: "0x2000",
-                  readable: null,
-                  writable: null,
-                  executable: null,
-                },
-              ])
-            : ok(name === "current_document" ? "fixture" : []),
-        ),
-    });
+    const client = await connect(
+      {
+        execute: (name) =>
+          Promise.resolve(
+            name === "list_segments"
+              ? ok([
+                  {
+                    name: "__TEXT",
+                    end: "0x2000",
+                    readable: null,
+                    writable: null,
+                    executable: null,
+                  },
+                ])
+              : ok(name === "current_document" ? "fixture" : []),
+          ),
+      },
+      [{ name: "binary_overview", arguments: {} }],
+    );
     const result = await client.callTool({
       name: "binary_overview",
       arguments: {},
@@ -244,6 +260,7 @@ describe("overview document identity through MCP", () => {
   it("uses the sole headless document when current-document selection is unsupported", async () => {
     const client = await connect(
       overviewPort(unsupported(), ["single-target"]),
+      [{ name: "binary_overview", arguments: {} }],
     );
     expect(
       jsonResult(
@@ -259,7 +276,9 @@ describe("overview document identity through MCP", () => {
   ])(
     "rejects ambiguous or missing headless identities: $documents",
     async ({ documents }) => {
-      const client = await connect(overviewPort(unsupported(), documents));
+      const client = await connect(overviewPort(unsupported(), documents), [
+        { name: "binary_overview", arguments: {} },
+      ]);
       expect(
         (await client.callTool({ name: "binary_overview", arguments: {} }))
           .isError,
@@ -272,6 +291,7 @@ describe("overview document identity through MCP", () => {
     async ({ value }) => {
       const client = await connect(
         overviewPort(ok(value), ["fallback-must-not-hide-error"]),
+        [{ name: "binary_overview", arguments: {} }],
       );
       expect(
         (await client.callTool({ name: "binary_overview", arguments: {} }))
@@ -286,6 +306,7 @@ describe("overview document identity through MCP", () => {
         err(new AnalysisProtocolError("failed current-document transport")),
         ["must-not-be-selected"],
       ),
+      [{ name: "binary_overview", arguments: {} }],
     );
     expect(
       (await client.callTool({ name: "binary_overview", arguments: {} }))

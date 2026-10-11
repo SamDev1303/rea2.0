@@ -98,6 +98,14 @@ const runSetupWorkflow = async (
       [host, plannedActions, appliedActions, clients, clientStates],
       readinessScope,
     );
+  if (options.installHopper && host.engineInstallationDisabled === true)
+    return fail(
+      "REA 2.0 analysis-engine installation is unavailable. Review trusted tooling separately; this setup does not download or install engines.",
+    );
+  if (options.installSkill === true && host.skillManagedExternally === true)
+    return fail(
+      "The /rea2 skill is owned by the shared skill registry. Use its reviewed installation and surface-sync workflow; this setup preserves the registry and does not install bundled reference instructions.",
+    );
   const unsupported = await hostRemediation(host, false);
   if (unsupported !== undefined) return fail(unsupported);
   const initialState = await host.initialSetupState(options.readinessScope);
@@ -106,8 +114,7 @@ const runSetupWorkflow = async (
     host,
     providerEnvironment,
     forceHopperInstall: options.installHopper,
-    proposeHopper:
-      options.proposeHopper ?? (confirm !== undefined && !options.structured),
+    proposeHopper: options.proposeHopper ?? false,
     initialDoctor: initialState.doctor,
   });
   clientStates = discovery.clientStates;

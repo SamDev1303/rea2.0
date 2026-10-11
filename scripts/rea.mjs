@@ -4,9 +4,14 @@ import { access } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Route production MCP before importing Incur. Incur owns registration helpers
-// such as `mcp add`, while only dist/main.js may serve the stdio tool catalog.
+// Route production MCP before importing Incur; registration uses reviewed local setup.
 const args = process.argv.slice(2);
+if (args[0] === "mcp" && args[1] === "add") {
+  process.stderr.write(
+    "REA 2.0 disables SDK mcp add because it invokes an external package runner. Use rea2 setup --dry-run, review the local configuration plan, then apply rea2 setup --yes.\n",
+  );
+  process.exit(1);
+}
 const { default: packageJson } = await import("../package.json", {
   with: { type: "json" },
 });
@@ -38,7 +43,7 @@ const runtimeFiles = isMcpMode
 
 if (!(await compiledRuntimeExists(runtimeFiles))) {
   process.stderr.write(
-    `REA's compiled runtime is missing. Run \`npm ci && npm run build:cached\` in ${packageRoot} to install dependencies and build REA, then restart it. If this is an installed package, reinstall rea-agents.\n`,
+    `REA 2.0's local compiled runtime is missing. Run \`npm ci --ignore-scripts && npm run build:cached\` in ${packageRoot} to install reviewed dependencies and build our fork, then restart it. There is no upstream fallback.\n`,
   );
   process.exitCode = 1;
 } else if (isMcpMode) {

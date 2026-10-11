@@ -40,6 +40,7 @@ const SOURCE_PATHS = {
   toolContracts: "dist/contracts/toolContracts.js",
   officialContracts: "dist/contracts/officialToolContracts.js",
   enhancedContracts: "dist/contracts/enhancedToolContracts.js",
+  swiftContracts: "dist/contracts/swiftToolContracts.js",
   sessionContracts: "dist/contracts/sessionToolContracts.js",
   binaryDiagnosticsContracts:
     "dist/contracts/native/binaryDiagnosticsToolContracts.js",
@@ -71,6 +72,8 @@ const SOURCE_PATHS = {
   javascriptRuntimeObservationContracts:
     "dist/contracts/javascript/javascriptRuntimeObservationToolContracts.js",
   applicationContracts: "dist/contracts/applicationToolContracts.js",
+  investigationWorkflowContracts:
+    "dist/contracts/investigationWorkflowToolContracts.js",
   analysisViewContracts: "dist/contracts/analysisViewToolContracts.js",
   webScriptContracts: "dist/contracts/webScriptToolContracts.js",
   javascriptRecoveryContracts:

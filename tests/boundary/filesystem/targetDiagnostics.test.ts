@@ -27,8 +27,8 @@ describe("target route diagnostics", () => {
       name: "target",
       ok: false,
       classification: "unsupported_target",
-      details: { constraint: "directory_requires_file" },
-      remediation: projected.remediation.action,
+      code: "capability_unavailable",
+      remediation: expect.stringContaining("no target bytes were acquired"),
     });
     const missing = await parseBinaryTarget(join(directory, "missing"));
     if (missing.ok) throw new Error("missing target was admitted");
@@ -40,8 +40,9 @@ describe("target route diagnostics", () => {
       await doctor.inspectTarget?.(join(directory, "missing")),
     ).toMatchObject({
       ok: false,
-      classification: "config_drift",
-      details: { reason: expect.stringContaining("does not exist") },
+      classification: "unsupported_target",
+      code: "capability_unavailable",
+      remediation: expect.stringContaining("no target bytes were acquired"),
     });
   });
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -60,8 +61,9 @@ describe("target route diagnostics", () => {
         });
         expect(await systemDoctorHost().inspectTarget?.(path)).toMatchObject({
           ok: false,
-          classification: "config_drift",
-          details: { reason: expect.stringContaining("permission denied") },
+          classification: "unsupported_target",
+          code: "capability_unavailable",
+          remediation: expect.stringContaining("no target bytes were acquired"),
         });
       } finally {
         await chmod(path, 0o600);

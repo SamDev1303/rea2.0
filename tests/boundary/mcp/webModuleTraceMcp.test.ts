@@ -1,6 +1,8 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { WebModuleTraceService } from "../../../src/application/WebModuleTraceService.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -12,10 +14,10 @@ import {
   webModuleResolverFixture,
 } from "../../fixtures/webModuleTrace.js";
 
-it("publishes valid SDK schemas and records the named module trace without a binary target", async () => {
+it("publishes valid SDK schemas and retains the direct synthetic module trace through MCP with public execution denied", async () => {
   const artifacts = webModuleArtifactsFixture();
   const service = new WebModuleTraceService(
-    { load: () => Promise.resolve(ok(artifacts)) },
+    { load: vi.fn(() => Promise.resolve(ok(artifacts))) },
     webModuleResolverFixture,
   );
   const session = createTestBinarySession(() => {
@@ -45,17 +47,22 @@ it("publishes valid SDK schemas and records the named module trace without a bin
   const outputSchema: Record<string, unknown> = advertised.outputSchema;
   const args = { manifest_path: "/analysis/manifest.json", script_index: 0 };
   expect(ajv.validate(inputSchema, args)).toBe(true);
-  const response = await client.callTool({
-    name: "trace_web_module_imports",
-    arguments: args,
-  });
-  expect(response.isError).not.toBe(true);
-  expect(
-    ajv.validate(outputSchema, response.structuredContent),
-    JSON.stringify(ajv.errors),
-  ).toBe(true);
+  await assertOwnedFixturePublicDenial(
+    client,
+    "trace_web_module_imports",
+    args,
+  );
+  expect(service.artifacts.load).not.toHaveBeenCalled();
+  const response = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.trace(args),
+  );
+  expect(ajv.validate(outputSchema, response), JSON.stringify(ajv.errors)).toBe(
+    true,
+  );
   const parsed = toolContract("trace_web_module_imports").outputSchema.parse(
-    response.structuredContent,
+    response,
   );
   const evidence = parseEvidence(parsed);
   expect(evidence.normalized_result).toMatchObject({

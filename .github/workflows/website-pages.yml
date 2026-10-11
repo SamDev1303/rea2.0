@@ -1,3 +1,5 @@
+# Publication is disabled for REA 2.0 local delivery. Historical steps are retained for attribution and reference only.
+
 name: Publish REA website
 
 on:
@@ -21,7 +23,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/main'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -120,7 +122,9 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.149.0"
           packageManager: npm
-          command: deploy --cwd website --env production --assets "${{ runner.temp }}/rea-website-public"
+          command:
+            deploy --cwd website --env production --assets "${{ runner.temp
+            }}/rea-website-public"
       - name: Publish to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
@@ -176,3 +180,4 @@ jobs:
               links = " and ".join(f"[{name}]({url})" for name, url in hosts.items())
               summary.write(f"Published commit `{expected}` to {links}.\n")
           PY
+    if: ${{ false }}

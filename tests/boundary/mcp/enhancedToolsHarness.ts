@@ -8,6 +8,10 @@ import {
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { AnalysisOperationPort } from "../../../src/application/AnalysisProvider.js";
 import { createServer } from "../../../src/server/createServer.js";
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 
 export const PROCEDURES = {
   "0x1": "_TtC7Fixture5Class",
@@ -23,8 +27,12 @@ export const inventory = (values: Readonly<Record<string, string>>) =>
 
 export const resources: Array<{ close(): Promise<void> }> = [];
 
-export const connect = async (analysis: AnalysisOperationPort) => {
+export const connect = async (
+  analysis: AnalysisOperationPort,
+  requests: readonly OwnedMcpFixtureRequest[],
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  await attachNonexecutingMcpFixture(server, analysis, requests);
   const client = new Client({ name: "enhanced-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

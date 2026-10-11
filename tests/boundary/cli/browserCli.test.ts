@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCliJson as runCli } from "../../fixtures/cliJsonProcess.js";
+import { runCliJson as runPublicCli } from "../../fixtures/cliJsonProcess.js";
+import { runRegisteredOwnedBrowserCli } from "../../support/web/registeredOwnedBrowserCliFixture.js";
 import {
   startFakeCdpBrowser,
   type FakeCdpBrowser,
@@ -366,3 +367,15 @@ const completeScenarioCapture = () => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const runCli = (
+  arguments_: readonly string[],
+  _environment: NodeJS.ProcessEnv,
+) => {
+  const browser = browsers.find(
+    (candidate) => candidate.endpoint === arguments_[1],
+  );
+  return browser === undefined
+    ? runPublicCli(arguments_, {})
+    : runRegisteredOwnedBrowserCli(browser, arguments_);
+};

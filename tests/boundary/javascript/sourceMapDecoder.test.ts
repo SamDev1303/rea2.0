@@ -41,6 +41,33 @@ const input = {
   position: webSourceLocationArgs.generated_position,
 };
 
+it("launches the owned codec with a private minimal environment excluding credentials and loaders", async () => {
+  let selected: Parameters<typeof spawnOwnedProviderProcess>[0] | undefined;
+  const response = await realDecoder({
+    environment: {
+      AWS_SECRET_ACCESS_KEY: "synthetic-sentinel",
+      NODE_OPTIONS: "--require=/outside",
+      DYLD_INSERT_LIBRARIES: "/outside.dylib",
+      LD_PRELOAD: "/outside.so",
+      HOME: "/outside-home",
+    },
+    launcher: (options) => {
+      selected = options;
+      return Promise.reject(new Error("environment inspected before spawn"));
+    },
+  }).trace(input);
+  expect(selected).toBeDefined();
+  expect(selected?.hostEnvironment).toEqual({
+    HOME: selected?.cwd,
+    TMPDIR: selected?.cwd,
+    XDG_CONFIG_HOME: selected?.cwd,
+    LANG: "C",
+    LC_ALL: "C",
+    UV_THREADPOOL_SIZE: "1",
+  });
+  expect(response.ok).toBe(false);
+});
+
 it("starts the codec deadline after cold ownership preparation", async () => {
   vi.useFakeTimers();
   try {

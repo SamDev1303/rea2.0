@@ -3,41 +3,37 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, it, onTestFinished } from "vitest";
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { parseEvidence } from "../../../src/domain/evidence.js";
-const entrypoint = fileURLToPath(
-  new URL("../../../scripts/rea.mjs", import.meta.url),
-);
+import pino from "pino";
+import { loadCompiledHistoricalCaptureFixture } from "../../support/web/compiledHistoricalCaptureFixture.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { runCliJson } from "../../fixtures/cliJsonProcess.js";
 const cli = async (
   path: string,
   format: string,
   extra: readonly string[] = [],
 ) => {
-  try {
-    const result = await promisify(execFile)(
-      process.execPath,
-      [
-        entrypoint,
-        "inspect-web-network-capture",
-        path,
-        format,
-        "--json",
-        ...extra,
-      ],
-      { env: { ...process.env, REA_MITMDUMP_COMMAND: "" }, timeout: 40_000 },
-    );
-    return { ok: true, stdout: result.stdout };
-  } catch (cause: unknown) {
-    if (
-      cause instanceof Error &&
-      "stdout" in cause &&
-      typeof cause.stdout === "string"
-    )
-      return { ok: false, stdout: cause.stdout };
-    throw cause;
-  }
+  const arguments_ = [
+    "inspect-web-network-capture",
+    path,
+    format,
+    "--json",
+    ...extra,
+  ];
+  const denied = await runCliJson(arguments_, {});
+  expect(denied).toMatchObject({ code: "capability_unavailable" });
+  const { registerWebNetworkCaptureCommands } =
+    await loadCompiledHistoricalCaptureFixture();
+  const result = await serveRegisteredCliFixture(
+    (registered) =>
+      registerWebNetworkCaptureCommands(
+        registered,
+        pino({ level: "silent" }),
+        {},
+      ),
+    arguments_,
+  );
+  return { ok: result.exitCode === 0, stdout: result.stdout };
 };
 import { historicalHar } from "../../fixtures/historicalHar.js";
 

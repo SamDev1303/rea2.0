@@ -1,4 +1,4 @@
-import { lstat, opendir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, opendir, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { parseBinary } from "plist";
@@ -13,6 +13,16 @@ import {
 } from "../domain/propertyListKeys.js";
 import { decodeXmlPlistText } from "../domain/propertyListXmlText.js";
 import { err, ok, type Result } from "../domain/result.js";
+import {
+  assertOwnedStaticFixtureAcquisition,
+  retainOwnedStaticFixtureCleanup,
+} from "../filesystem/OwnedStaticReadBoundary.js";
+import { OwnedDirectoryHandle } from "../filesystem/OwnedDirectoryHandle.js";
+import {
+  OwnedStaticFixtureCleanupFailure,
+  withOwnedStaticFixtureResource,
+} from "../filesystem/OwnedStaticResource.js";
+import { readRegularFile } from "./RegularFileRead.js";
 
 /** Decoded representation bound for one binary Info.plist. */
 const BINARY_PLIST_DECODE_BYTES = 16 * 1024 * 1024;
@@ -48,7 +58,10 @@ export interface AppBundleFileSystem {
   readonly decodeBinaryPlist?: (path: string) => Promise<string>;
 }
 
-const defaultFileSystem: AppBundleFileSystem = { readFile, realpath };
+const defaultFileSystem: AppBundleFileSystem = {
+  readFile: readRegularFile,
+  realpath,
+};
 
 /**
  * Resolve an app bundle directory to its declared program file. macOS and
@@ -71,6 +84,7 @@ export const resolveAppBundleExecutable = async (
         return resolveLayoutExecutable(wrapped, wrappedLayout, fileSystem);
     }
   } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure) throw cause;
     if (cause instanceof BinaryTargetError) return err(cause);
     return err(
       new BinaryTargetError(path, errorReason(cause, path), { cause }),
@@ -104,6 +118,7 @@ const presentLayout = async (
  */
 const layoutPlistPresent = async (path: string): Promise<boolean> => {
   try {
+    await assertOwnedStaticFixtureAcquisition(path, "metadata");
     return (await stat(path)).isFile();
   } catch (cause: unknown) {
     if (isAbsence(cause)) return false;
@@ -155,19 +170,37 @@ const errorReason = (cause: unknown, path: string): string =>
 const wrappedBundle = async (bundle: string): Promise<string | undefined> => {
   const wrapper = join(bundle, "Wrapper");
   try {
+    await assertOwnedStaticFixtureAcquisition(wrapper, "metadata");
     if (!(await lstat(wrapper)).isDirectory()) return undefined;
   } catch (cause: unknown) {
     if (isAbsence(cause)) return undefined;
     throw cause;
   }
-  let app: string | undefined;
-  for await (const entry of await opendir(wrapper)) {
-    if (!entry.isDirectory() || !entry.name.toLowerCase().endsWith(".app"))
-      continue;
-    if (app !== undefined) return undefined;
-    app = join(wrapper, entry.name);
+  await assertOwnedStaticFixtureAcquisition(wrapper, "directory");
+  const owner = new OwnedDirectoryHandle(await opendir(wrapper));
+  try {
+    return await withOwnedStaticFixtureResource(
+      { kind: "directory", owner, scope: "parser" },
+      async () => {
+        let app: string | undefined;
+        while (true) {
+          const entry = await owner.handle.read();
+          if (entry === null) return app;
+          if (
+            !entry.isDirectory() ||
+            !entry.name.toLowerCase().endsWith(".app")
+          )
+            continue;
+          if (app !== undefined) return undefined;
+          app = join(wrapper, entry.name);
+        }
+      },
+    );
+  } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure)
+      retainOwnedStaticFixtureCleanup(cause);
+    throw cause;
   }
-  return app;
 };
 
 const resolveLayoutExecutable = async (
@@ -178,8 +211,10 @@ const resolveLayoutExecutable = async (
   const plistPath = join(bundle, ...layout.plist);
   let plist: Buffer;
   try {
+    await assertOwnedStaticFixtureAcquisition(plistPath, "file");
     plist = await fileSystem.readFile(plistPath);
   } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure) throw cause;
     return err(
       new BinaryTargetError(
         plistPath,
@@ -201,6 +236,7 @@ const resolveLayoutExecutable = async (
             parseBinaryPlistExecutable(plist))
         : parseXmlPlistExecutable(decodeXmlPlistText(plist));
   } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure) throw cause;
     return err(
       new BinaryTargetError(
         plistPath,
@@ -220,6 +256,8 @@ const resolveLayoutExecutable = async (
   const programs = join(bundle, ...layout.programs);
   const executable = join(programs, name);
   try {
+    await assertOwnedStaticFixtureAcquisition(programs, "metadata");
+    await assertOwnedStaticFixtureAcquisition(executable, "metadata");
     const [canonicalPrograms, canonicalExecutable] = await Promise.all([
       fileSystem.realpath(programs),
       fileSystem.realpath(executable),
@@ -233,6 +271,7 @@ const resolveLayoutExecutable = async (
       );
     return ok({ executable: canonicalExecutable, infoPlist: plistPath });
   } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure) throw cause;
     return err(
       new BinaryTargetError(
         executable,

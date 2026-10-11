@@ -1,9 +1,23 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
+import {
+  assertOwnedStaticFixtureAcquisition,
+  assertOwnedStaticFixtureDescriptor,
+  withOwnedStaticFixtureFile,
+  retainOwnedStaticFixtureCleanup,
+  type OwnedStaticFixtureDescriptor,
+} from "../../filesystem/OwnedStaticReadBoundary.js";
+import {
+  OwnedStaticFixtureCleanupFailure,
+  withOwnedStaticFixtureResource,
+} from "../../filesystem/OwnedStaticResource.js";
 import { join, relative, sep } from "node:path";
 
-import { AnalysisInputError } from "../../domain/analysisErrorCore.js";
+import {
+  AnalysisInputError,
+  AnalysisCapabilityUnavailableError,
+} from "../../domain/analysisErrorCore.js";
 import { resolveTreePath } from "../../domain/apple/dyldPaths.js";
 import {
   dylibResolutionInputSchema,
@@ -66,9 +80,12 @@ class FilesystemTreeView implements DylibTreeView {
     cancelled(this.signal);
     const absolute = join(this.root, path);
     try {
+      await assertOwnedStaticFixtureAcquisition(absolute, "metadata");
       const metadata = await lstat(absolute);
-      if (metadata.isSymbolicLink())
+      if (metadata.isSymbolicLink()) {
+        await assertOwnedStaticFixtureAcquisition(absolute, "file");
         return { kind: "symlink", target: await readlink(absolute) };
+      }
       if (metadata.isDirectory()) return { kind: "directory" };
       return metadata.isFile() ? { kind: "file" } : undefined;
     } catch (cause: unknown) {
@@ -98,6 +115,8 @@ export const traceDylibResolution = async (options: {
   // keeps its reason and path.
   let root = options.rootPath;
   try {
+    await assertOwnedStaticFixtureAcquisition(options.rootPath, "metadata");
+    await assertOwnedStaticFixtureAcquisition(options.targetPath, "metadata");
     root = await realpath(options.rootPath);
     const target = relative(root, await realpath(options.targetPath))
       .split(sep)
@@ -155,6 +174,7 @@ export const traceDylibResolution = async (options: {
       })),
     });
   } catch (cause: unknown) {
+    if (cause instanceof AnalysisCapabilityUnavailableError) throw cause;
     if (options.signal?.aborted === true)
       throw new ArtifactReaderFailure(
         "cancelled",
@@ -184,25 +204,37 @@ const executableRoots = async (
 ): Promise<{ readonly roots: string[]; readonly unclassified: string[] }> => {
   const roots: string[] = [];
   const unclassified: string[] = [];
-  for await (const entry of new DirectoryArtifactReader(root).entries(signal)) {
-    if (
-      entry.kind !== "file" ||
-      !(await startsWithMachoMagic(entry.adapterKey))
-    )
-      continue;
-    const facts = await view.image(entry.path);
-    if (facts.status === "malformed" || facts.status === "unsupported")
-      unclassified.push(entry.path);
-    else if (
-      facts.status === "parsed" &&
-      facts.slices.some(({ file_type: type }) => type === "execute")
-    )
-      roots.push(entry.path);
+  const reader = new DirectoryArtifactReader(root);
+  try {
+    return await withOwnedStaticFixtureResource(
+      { kind: "reader", owner: reader, scope: "parser" },
+      async () => {
+        for await (const entry of reader.entries(signal)) {
+          if (
+            entry.kind !== "file" ||
+            !(await startsWithMachoMagic(entry.adapterKey))
+          )
+            continue;
+          const facts = await view.image(entry.path);
+          if (facts.status === "malformed" || facts.status === "unsupported")
+            unclassified.push(entry.path);
+          else if (
+            facts.status === "parsed" &&
+            facts.slices.some(({ file_type: type }) => type === "execute")
+          )
+            roots.push(entry.path);
+        }
+        return {
+          roots: roots.sort(compare),
+          unclassified: unclassified.sort(compare),
+        };
+      },
+    );
+  } catch (cause: unknown) {
+    if (cause instanceof OwnedStaticFixtureCleanupFailure)
+      retainOwnedStaticFixtureCleanup(cause);
+    throw cause;
   }
-  return {
-    roots: roots.sort(compare),
-    unclassified: unclassified.sort(compare),
-  };
 };
 
 const compare = (left: string, right: string): number =>
@@ -246,14 +278,30 @@ const requireMachoRoots = async (
 };
 
 const startsWithMachoMagic = async (path: string): Promise<boolean> => {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
+  await assertOwnedStaticFixtureAcquisition(path, "file");
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  return withOwnedStaticFixtureFile(handle, async () => {
+    assertRegularDylibDescriptor(path, await handle.stat());
     const buffer = new Uint8Array(4);
     const { bytesRead } = await handle.read(buffer, 0, 4, 0);
     return hasMachoMagic(buffer.subarray(0, bytesRead));
-  } finally {
-    await handle.close();
-  }
+  });
+};
+
+/** Regular-file admission also applies when no owned-fixture boundary is active. */
+const assertRegularDylibDescriptor = (
+  path: string,
+  metadata: OwnedStaticFixtureDescriptor,
+): void => {
+  assertOwnedStaticFixtureDescriptor(path, metadata);
+  if (!metadata.isFile())
+    throw new ArtifactReaderFailure(
+      "path",
+      "Selected dylib input is not a regular file",
+    );
 };
 
 const identityOf = (metadata: {
@@ -279,9 +327,14 @@ const readImage = async (
   readonly identity: FileIdentity;
 }> => {
   cancelled(signal);
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
+  await assertOwnedStaticFixtureAcquisition(path, "file");
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  return withOwnedStaticFixtureFile(handle, async () => {
     const metadata = await handle.stat({ bigint: true });
+    assertRegularDylibDescriptor(path, metadata);
     const size = Number(metadata.size);
     const facts = await readMachoImage(async (offset, length) => {
       cancelled(signal);
@@ -292,9 +345,7 @@ const readImage = async (
       return buffer.subarray(0, bytesRead);
     }, size);
     return { facts, identity: identityOf(metadata) };
-  } finally {
-    await handle.close();
-  }
+  });
 };
 
 /** Hash a file, failing if it is not the file (or the version) that was parsed. */
@@ -307,9 +358,10 @@ const fileSha256 = async (
   },
 ): Promise<string> => {
   const { signal } = options;
+  await assertOwnedStaticFixtureAcquisition(absolute, "file");
   const handle = await open(
     absolute,
-    constants.O_RDONLY | constants.O_NOFOLLOW,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   const unchanged = async (): Promise<void> => {
     if (
@@ -321,7 +373,8 @@ const fileSha256 = async (
         `${options.path} changed while its dyld load commands were traced`,
       );
   };
-  try {
+  return withOwnedStaticFixtureFile(handle, async () => {
+    assertRegularDylibDescriptor(absolute, await handle.stat());
     await unchanged();
     const hash = createHash("sha256");
     const buffer = new Uint8Array(HASH_CHUNK_BYTES);
@@ -333,9 +386,7 @@ const fileSha256 = async (
     }
     await unchanged();
     return hash.digest("hex");
-  } finally {
-    await handle.close();
-  }
+  });
 };
 
 const cancelled = (signal?: AbortSignal): void => {

@@ -6,17 +6,22 @@ import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { ok } from "../../../src/domain/result.js";
 import { createServer } from "../../../src/server/createServer.js";
+import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import {
   binaryLayoutFixture,
   BINARY_LAYOUT_TEST_PROVIDER,
 } from "../../fixtures/binaryDiagnostics/layout.js";
 
-it("advertises exact valid schemas and records inline layout without a binary target", async () => {
+it("advertises exact schemas, rejects public layout parsing and views retained synthetic producer Evidence", async () => {
   const value = binaryLayoutFixture();
+  let producerCalls = 0;
   const service = new BinaryLayoutService({
     identity: BINARY_LAYOUT_TEST_PROVIDER,
-    inspect: () => Promise.resolve(ok(value)),
+    inspect: () => {
+      producerCalls += 1;
+      return Promise.resolve(ok(value));
+    },
   });
   const session = createTestBinarySession(() => {
     throw new Error("deep provider must not start");
@@ -52,23 +57,47 @@ it("advertises exact valid schemas and records inline layout without a binary ta
       approval: true,
     }),
   ).toBe(false);
-  const response = await client.callTool({
+  const denied = await client.callTool({
     name: "inspect_binary_layout",
     arguments: { path: value.artifact.path },
   });
-  expect(response.isError).not.toBe(true);
+  expect(denied.isError).toBe(true);
+  expect(parseMcpToolError(denied)).toMatchObject({
+    error: {
+      code: "capability_unavailable",
+      details: {
+        operation: "inspect_binary_layout",
+        provider_id: "rea2-protected-host",
+      },
+    },
+  });
+  expect(session.activeTarget()).toBeUndefined();
+  expect(producerCalls).toBe(0);
+  // The controller-owned port produces observations directly; this is not a successful public layout receipt.
+  const produced = await service.inspect({ path: value.artifact.path });
+  expect(produced.ok).toBe(true);
+  if (!produced.ok) throw produced.error;
+  expect(producerCalls).toBe(1);
   expect(
-    ajv.validate(outputSchema, response.structuredContent),
+    ajv.validate(outputSchema, produced.value),
     JSON.stringify(ajv.errors),
   ).toBe(true);
   const parsed = toolContract("inspect_binary_layout").outputSchema.parse(
-    response.structuredContent,
+    produced.value,
   );
+  expect(session.recordEvidence(produced.value).ok).toBe(true);
   const evidence = parseEvidence(parsed);
   expect(evidence.confidence).toBe("observed");
+  expect(evidence.raw_result).toBeNull();
+  expect(evidence.parameters).toMatchObject({ path: value.artifact.path });
   expect(evidence.subject?.digest.sha256).toBe(value.artifact.sha256);
   expect(parsed.normalized_result).toEqual(value);
   expect(session.evidenceById(evidence.evidence_id)).toEqual(evidence);
+  const invalid = await service.inspect({ path: "relative.elf" });
+  expect(invalid).toMatchObject({
+    ok: false,
+    error: { _tag: "AnalysisInputError", operation: "inspect_binary_layout" },
+  });
   const viewed = await client.callTool({
     name: "inspect_analysis_view",
     arguments: {

@@ -89,23 +89,27 @@ describe("readReferenceSource entries", () => {
     );
   });
 
-  it("reads a source file larger than the former 16 MiB ceiling", async () => {
+  it("rejects a source file above the protected eight MiB budget", async () => {
     const root = await createTestTempDirectory("rea-reference-large-");
-    const size = 16 * 1024 * 1024 + 1;
-    await writeFile(join(root, "large.bin"), Buffer.alloc(size, 0x61));
-
+    await writeFile(
+      join(root, "large.bin"),
+      Buffer.alloc(8 * 1024 * 1024 + 1, 0x61),
+    );
     const result = await readReferenceSource(root);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("byte budget");
+      expect(result.error.partial?.bytesRead).toBe(0);
+    }
+  });
 
+  it("accepts a source file at the protected eight MiB budget", async () => {
+    const root = await createTestTempDirectory("rea-reference-limit-");
+    const size = 8 * 1024 * 1024;
+    await writeFile(join(root, "at-limit.bin"), Buffer.alloc(size, 0x61));
+    const result = await readReferenceSource(root);
     if (!result.ok) throw result.error;
     expect(result.value.bytesRead).toBe(size);
-    expect(result.value.entries).toContainEqual(
-      expect.objectContaining({
-        status: "read",
-        kind: "file",
-        path: "large.bin",
-        size,
-      }),
-    );
   });
 
   it("traverses source directories deeper than the former depth ceiling", async () => {

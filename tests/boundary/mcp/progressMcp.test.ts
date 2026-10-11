@@ -5,6 +5,7 @@ import type { AnalysisOperationPort } from "../../../src/application/AnalysisPro
 import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
 import { err } from "../../../src/domain/result.js";
 import { createServer } from "../../../src/server/createServer.js";
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 import { observed } from "../../fixtures/analysisExecution.js";
 
 describe("ordinary MCP progress and cancellation", () => {
@@ -13,6 +14,9 @@ describe("ordinary MCP progress and cancellation", () => {
       execute: () => Promise.resolve(observed("0x1000")),
     };
     const server = createServer({ kind: "fixed", analysis });
+    await attachNonexecutingMcpFixture(server, analysis, [
+      { name: "current_address", arguments: {} },
+    ]);
     const client = new Client({ name: "progress-test", version: "1" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
@@ -60,6 +64,9 @@ describe("ordinary MCP progress and cancellation", () => {
       },
     };
     const server = createServer({ kind: "fixed", analysis });
+    await attachNonexecutingMcpFixture(server, analysis, [
+      { name: "current_address", arguments: {} },
+    ]);
     const client = new Client({ name: "cancellation-test", version: "1" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();

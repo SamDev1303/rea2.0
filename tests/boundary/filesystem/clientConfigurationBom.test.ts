@@ -1,3 +1,4 @@
+import { localRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -45,8 +46,8 @@ describe.each([
       ).replaceAll("\n", "\r\n")}\r\n`;
       await mkdir(dirname(client.configPath), { recursive: true });
       await writeFile(client.configPath, original);
-      const currentCommandPath = join(home, "rea");
-      const command = [currentCommandPath, "mcp"];
+      const command = localRegistrationCommand();
+      const currentCommandPath = command[1]!;
       expect(await inspectClientConfiguration(client, {}, command)).toEqual({
         status: "update",
         backupPath: `${client.configPath}.rea.backup`,
@@ -65,7 +66,7 @@ describe.each([
           label: "left\uFEFFright",
           [serversKey]: {
             other: { command: "other" },
-            rea: clientRegistrationEntry(client.format, command, {}),
+            rea2: clientRegistrationEntry(client.format, command, {}),
           },
           theme: "dark",
         },
@@ -99,7 +100,7 @@ describe.each([
   );
 });
 
-it.each(['\uFEFF{"servers": {"rea": @}}', '\uFEFF{"setting":\uFEFFtrue}'])(
+it.each(['\uFEFF{"servers": {"rea2": @}}', '\uFEFF{"setting":\uFEFFtrue}'])(
   "rejects malformed BOM placement without mutation: %j",
   async (original) => {
     const home = await createTestTempDirectory(
@@ -114,10 +115,14 @@ it.each(['\uFEFF{"servers": {"rea": @}}', '\uFEFF{"setting":\uFEFFtrue}'])(
     );
 
     expect(
-      await inspectClientConfiguration(client, {}, ["rea", "mcp"]),
+      await inspectClientConfiguration(client, {}, localRegistrationCommand()),
     ).toMatchObject({ status: "invalid" });
     expect(
-      await configureClientConfiguration(client, {}, ["rea", "mcp"]),
+      await configureClientConfiguration(
+        client,
+        {},
+        localRegistrationCommand(),
+      ),
     ).toEqual({ status: "failed", reason: "readback" });
     expect(await readFile(configPath)).toEqual(Buffer.from(original));
     expect(await readdir(home)).toEqual(["mcp.json"]);
@@ -137,8 +142,8 @@ it("restores original BOM-prefixed JSONC bytes after update and removal", async 
   await mkdir(dirname(client.configPath), { recursive: true });
   await writeFile(client.configPath, original);
 
-  const firstCommand = [join(home, "bin", "rea"), "mcp"];
-  const updatedCommand = [join(home, "updated", "bin", "rea"), "mcp"];
+  const firstCommand = [join(home, "bin", "rea2"), "mcp"];
+  const updatedCommand = localRegistrationCommand();
   expect(
     await configureClientConfiguration(client, {}, firstCommand),
   ).toMatchObject({ status: "configured" });
@@ -148,7 +153,7 @@ it("restores original BOM-prefixed JSONC bytes after update and removal", async 
   const updated = await readFile(client.configPath, "utf8");
   expect(parseClientConfiguration(updated, client.format).servers).toEqual({
     other: { command: "other\uFEFFtool" },
-    rea: clientRegistrationEntry(client.format, updatedCommand, {}),
+    rea2: clientRegistrationEntry(client.format, updatedCommand, {}),
   });
 
   expect(await systemUninstallHost(home).removeClient(client)).toMatchObject({
@@ -169,7 +174,7 @@ it.each(["", "\n  \n", "\uFEFF"])(
       throw new Error("missing Antigravity JSON config");
     await mkdir(dirname(client.configPath), { recursive: true });
     await writeFile(client.configPath, original);
-    const command = [join(home, "rea"), "mcp"];
+    const command = [join(home, "rea2"), "mcp"];
 
     expect(await inspectClientConfiguration(client, {}, command)).toEqual({
       status: "update",
@@ -180,7 +185,7 @@ it.each(["", "\n  \n", "\uFEFF"])(
       backupPath: `${client.configPath}.rea.backup`,
     });
     expect(JSON.parse(await readFile(client.configPath, "utf8"))).toEqual({
-      mcpServers: { rea: clientRegistrationEntry(client.format, command, {}) },
+      mcpServers: { rea2: clientRegistrationEntry(client.format, command, {}) },
     });
     expect(await inspectClientConfiguration(client, {}, command)).toEqual({
       status: "already_current",

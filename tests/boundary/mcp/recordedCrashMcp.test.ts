@@ -1,6 +1,8 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { RecordedCrashService } from "../../../src/application/binaryDiagnostics/RecordedCrashService.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -12,11 +14,11 @@ import {
   RECORDED_CRASH_TEST_PROVIDER,
 } from "../../fixtures/binaryDiagnostics/recordedCrash.js";
 
-it("advertises exact valid schemas and records inline recorded-core evidence without a binary target", async () => {
+it("advertises exact valid schemas and retains direct synthetic recorded-core Evidence through MCP with public execution denied", async () => {
   const value = recordedCrashFixture();
   const service = new RecordedCrashService({
     identity: RECORDED_CRASH_TEST_PROVIDER,
-    inspect: () => Promise.resolve(ok(value)),
+    inspect: vi.fn(() => Promise.resolve(ok(value))),
   });
   const session = createTestBinarySession(() => {
     throw new Error("deep provider must not start");
@@ -52,17 +54,20 @@ it("advertises exact valid schemas and records inline recorded-core evidence wit
       approval: true,
     }),
   ).toBe(false);
-  const response = await client.callTool({
-    name: "inspect_recorded_crash",
-    arguments: { path: value.artifact.path },
+  await assertOwnedFixturePublicDenial(client, "inspect_recorded_crash", {
+    path: value.artifact.path,
   });
-  expect(response.isError).not.toBe(true);
-  expect(
-    ajv.validate(outputSchema, response.structuredContent),
-    JSON.stringify(ajv.errors),
-  ).toBe(true);
+  expect(service.provider.inspect).not.toHaveBeenCalled();
+  const response = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.inspect({ path: value.artifact.path }),
+  );
+  expect(ajv.validate(outputSchema, response), JSON.stringify(ajv.errors)).toBe(
+    true,
+  );
   const parsed = toolContract("inspect_recorded_crash").outputSchema.parse(
-    response.structuredContent,
+    response,
   );
   const evidence = parseEvidence(parsed);
   expect(evidence.confidence).toBe("observed");

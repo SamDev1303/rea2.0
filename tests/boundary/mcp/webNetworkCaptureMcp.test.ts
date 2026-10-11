@@ -1,7 +1,12 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import {
+  assertOwnedFixturePublicDenial,
+  projectOwnedProducerError,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { WebNetworkCaptureService } from "../../../src/application/WebNetworkCaptureService.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -10,13 +15,13 @@ import { webNetworkCaptureSchema } from "../../../src/domain/webNetworkCapture.j
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 
-it("publishes valid SDK schemas and retains historical inline Evidence with the supplied session", async () => {
+it("publishes valid SDK schemas and retains direct synthetic historical Evidence with the supplied session and denies public decoding", async () => {
   const service = new WebNetworkCaptureService({
-    inspect: () =>
+    inspect: vi.fn(() =>
       Promise.resolve(
         ok({
           artifact: { path: "/capture.har", sha256: "a".repeat(64), bytes: 10 },
-          format: "har",
+          format: "har" as const,
           decoder: { id: "test-capture-port", name: "test port", version: "1" },
           container: {
             reported: { creator: "fixture", ["__proto__"]: { preserved: 7 } },
@@ -26,10 +31,11 @@ it("publishes valid SDK schemas and retains historical inline Evidence with the 
           },
           total_records: 0,
           records: [],
-          runtime_attribution: "unknown",
+          runtime_attribution: "unknown" as const,
           limitations: ["synthetic application port, no real decoder claim"],
         }),
       ),
+    ),
   });
   const session = createTestBinarySession(() => {
     throw new Error("Binary provider must not start");
@@ -63,17 +69,22 @@ it("publishes valid SDK schemas and retains historical inline Evidence with the 
   expect(ajv.validateSchema(outputSchema)).toBe(true);
   const args = { capture_path: "/capture.har", format: "har" };
   expect(ajv.validate(inputSchema, args)).toBe(true);
-  const response = await client.callTool({
-    name: "inspect_web_network_capture",
-    arguments: args,
-  });
-  expect(response.isError).not.toBe(true);
-  expect(
-    ajv.validate(outputSchema, response.structuredContent),
-    JSON.stringify(ajv.errors),
-  ).toBe(true);
+  await assertOwnedFixturePublicDenial(
+    client,
+    "inspect_web_network_capture",
+    args,
+  );
+  expect(service.port.inspect).not.toHaveBeenCalled();
+  const response = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.inspect(args),
+  );
+  expect(ajv.validate(outputSchema, response), JSON.stringify(ajv.errors)).toBe(
+    true,
+  );
   const parsed = toolContract("inspect_web_network_capture").outputSchema.parse(
-    response.structuredContent,
+    response,
   );
   const evidence = parseEvidence(parsed);
   const capture = webNetworkCaptureSchema.parse(parsed.normalized_result);
@@ -97,6 +108,17 @@ it("publishes valid SDK schemas and retains historical inline Evidence with the 
   });
   expect(invalidSensitive.isError).toBe(true);
   expect(parseMcpToolError(invalidSensitive)).toMatchObject({
+    error: { code: "capability_unavailable" },
+  });
+  expect(
+    projectOwnedProducerError(
+      await service.inspect({
+        ...args,
+        sensitive_values: ["secret"],
+        mysecret: true,
+      }),
+    ),
+  ).toMatchObject({
     error: { code: "invalid_request", details: { issues: [{ path: [] }] } },
   });
   expect(JSON.stringify(invalidSensitive)).not.toContain("secret");

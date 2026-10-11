@@ -1,3 +1,13 @@
+import { snapshotPublicInvestigationInput } from "../application/investigationSafety/PublicInputSnapshot.js";
+import { admitInvestigationInput } from "../application/investigationSafety/InvestigationAdmission.js";
+import {
+  admitOwnedFixtureOperation,
+  getOwnedFixtureHandlerPort,
+} from "../application/investigationSafety/OwnedFixturePolicy.js";
+import { runOwnedFixtureExecution } from "../application/investigationSafety/OwnedFixtureExecution.js";
+import { admitPublicJavaScriptInput } from "../application/investigationSafety/PublicJavaScriptInput.js";
+import { captureInvestigationDispatchContext } from "./InvestigationDispatchContext.js";
+import { AnalysisError } from "../domain/analysisErrorBase.js";
 import {
   McpServer,
   isCallToolResult,
@@ -49,6 +59,17 @@ const hasAdvertisedInputJsonSchema = (value: unknown): boolean => {
 
 /** Bind oversized MCP error recovery to this server's Evidence ledger. */
 export class EvidenceMcpServer extends McpServer {
+  #admissions: Promise<void> = Promise.resolve();
+
+  /** Order admission and handler entry, without waiting for the running operation. */
+  #admitInOrder<Value>(prepare: () => Promise<Value>): Promise<Value> {
+    const admitted = this.#admissions.then(prepare);
+    this.#admissions = admitted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return admitted;
+  }
   constructor(
     info: Implementation,
     options: McpServerOptions,
@@ -106,7 +127,37 @@ export class EvidenceMcpServer extends McpServer {
       (inputSchema === undefined
         ? config
         : { ...config, inputSchema }) as never,
-      callback as never,
+      (async (...args: Parameters<ToolCallback<InputArgs>>) => {
+        try {
+          const input = snapshotPublicInvestigationInput(name, args[0]);
+          const executionArgs =
+            args[1] === undefined
+              ? [input]
+              : [input, captureInvestigationDispatchContext(name, args[1])];
+          const accepted = await this.#admitInOrder(async () => {
+            const admitted = await admitOwnedFixtureOperation(
+              this,
+              name,
+              input,
+              getOwnedFixtureHandlerPort(this),
+            );
+            if (admitted === undefined) {
+              await admitInvestigationInput(name, input);
+              await admitPublicJavaScriptInput(name, input);
+            }
+            // Wrapping the promise prevents the queue from awaiting execution.
+            return {
+              execution: runOwnedFixtureExecution(admitted, () =>
+                Reflect.apply(callback, undefined, executionArgs),
+              ),
+            };
+          });
+          return await accepted.execution;
+        } catch (cause: unknown) {
+          if (!(cause instanceof AnalysisError)) throw cause;
+          return this.delivery.toErrorToolResult(cause);
+        }
+      }) as never,
     );
   }
 

@@ -181,7 +181,9 @@ const verifyEndpointWorkflows = async ({
       },
     },
   });
-  expect(featureResponse.isError).not.toBe(true);
+  expect(featureResponse.isError, JSON.stringify(featureResponse)).not.toBe(
+    true,
+  );
   const featureEvidence = toolContract(
     "trace_application_feature",
   ).outputSchema.parse(featureResponse.structuredContent);

@@ -16,6 +16,7 @@ import type { CliInstance } from "./types.js";
 import { runCliJavaScriptApplicationAnalysis } from "./javascriptApplicationAnalysis.js";
 import { withCommandCancellation } from "./commandCancellation.js";
 import { javascriptApplicationOptions } from "../cliObservationOptions.js";
+import { consumePublicJavaScriptAlias } from "./publicJavaScriptRoute.js";
 
 /** Register provider-neutral binary overview and procedure CLI commands. */
 export const registerCoreBinaryCommands = (
@@ -54,15 +55,20 @@ const registerOverviewCommands = (
     options: overviewOptions.extend({
       integrityPolicy: javascriptApplicationOptions.shape.integrityPolicy,
     }),
-    run: async ({ args, options }) => {
+    run: async (context) => {
+      const { args, options } = context;
+      const admittedDirectory = await consumePublicJavaScriptAlias(context);
       // Route JavaScript targets exactly like analyze-javascript-application,
       // including typed cancellation; cancellation wraps logging so its exit
       // code is not replaced by the logged failure status.
-      if (await routesToJavaScriptAnalysis(args.path, options))
+      if (
+        admittedDirectory !== undefined ||
+        (await routesToJavaScriptAnalysis(args.path, options))
+      )
         return withCommandCancellation((signal) =>
           logCliCommand(logger, "analyze", () =>
             runCliJavaScriptApplicationAnalysis(
-              {
+              admittedDirectory ?? {
                 input_path: resolve(args.path),
                 integrity_policy: options.integrityPolicy,
               },

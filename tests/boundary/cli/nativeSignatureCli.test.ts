@@ -7,6 +7,7 @@ import { describe, expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { inspectSyntheticNative } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const run = promisify(execFile);
 
@@ -14,7 +15,7 @@ const run = promisify(execFile);
 const adHocProgram = async (directory: string, name: string) => {
   const path = join(directory, name);
   await copyFile("/usr/bin/true", path);
-  await run("/usr/bin/codesign", ["-s", "-", "-f", path]);
+  await run("/usr/bin/codesign", ["-s", "-", "-f", path], { env: {} });
   return path;
 };
 
@@ -52,9 +53,16 @@ describe.skipIf(process.platform !== "darwin")(
               REA_ANALYSIS_PROVIDER: "auto",
             },
           });
-          expect(result.exitCode).toBe(0);
-          expect(result.json).toMatchObject({
-            normalized_result: {
+          expect(result.exitCode).toBe(1);
+          expect(result.json).toMatchObject({ code: "capability_unavailable" });
+          const inspected = await inspectSyntheticNative(
+            { path },
+            "inspect_signature",
+          );
+          expect(inspected.ok).toBe(true);
+          if (!inspected.ok) throw inspected.error;
+          expect(inspected.value).toMatchObject({
+            result: {
               signed: true,
               team_identifier: null,
               authorities: [],
@@ -70,9 +78,19 @@ describe.skipIf(process.platform !== "darwin")(
             REA_ANALYSIS_PROVIDER: "auto",
           },
         });
-        // An ad hoc identifier derives from the file name, line breaks included.
+        expect(identifier.exitCode).toBe(1);
         expect(identifier.json).toMatchObject({
-          normalized_result: {
+          code: "capability_unavailable",
+        });
+        const inspectedIdentifier = await inspectSyntheticNative(
+          { path: program },
+          "inspect_signature",
+        );
+        expect(inspectedIdentifier.ok).toBe(true);
+        if (!inspectedIdentifier.ok) throw inspectedIdentifier.error;
+        // An ad hoc identifier derives from the file name, line breaks included.
+        expect(inspectedIdentifier.value).toMatchObject({
+          result: {
             identifier: expect.stringMatching(
               new RegExp(
                 `^tool\\nAuthority=${forged.replace(/[()]/gu, "\\$&")}\\nTeamIdentifier=ABCDE12345-`,

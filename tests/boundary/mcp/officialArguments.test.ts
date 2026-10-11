@@ -1,3 +1,7 @@
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 import { parseConfig } from "../../../src/config/parseConfig.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -19,8 +23,17 @@ import {
   createTestBinarySession,
 } from "../../fixtures/binarySession.js";
 
-const connect = async (analysis: AnalysisOperationPort) => {
+const connect = async (
+  analysis: AnalysisOperationPort,
+  requests: readonly OwnedMcpFixtureRequest[] = [],
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  try {
+    await attachNonexecutingMcpFixture(server, analysis, requests);
+  } catch (cause) {
+    await server.close();
+    throw cause;
+  }
   const client = new Client({ name: "argument-parity", version: "1.0.0" });
   onTestFinished(async () => {
     await client.close();
@@ -56,7 +69,10 @@ describe("official operation arguments", () => {
       createBinarySession: createSession,
       createManagedBinarySession: createSession,
     };
-    const client = await connect({ execute });
+    const client = await connect({ execute }, [
+      { name: "procedure_pseudo_code", arguments: { procedure: "main" } },
+      { name: "search_strings", arguments: { pattern: "entry" } },
+    ]);
     for (const [name, mcpParameters, cliParameters] of [
       ["procedure_pseudo_code", { procedure: "main" }, { procedure: "main" }],
       [
@@ -109,28 +125,36 @@ describe("official operation arguments", () => {
       inline_comment: "existing inline finding",
     };
     const parameters: Readonly<Record<string, JsonValue>>[] = [];
-    const client = await connect({
-      execute: (_name, input) => {
-        parameters.push(input);
-        if (typeof input.comment === "string")
-          annotations.comment = input.comment;
-        if (typeof input.inline_comment === "string")
-          annotations.inline_comment = input.inline_comment;
-        return Promise.resolve(
-          observed(
-            jsonValueSchema.parse({
-              annotations,
-              dossier,
-              effects: {
-                scope: "session-analysis-database",
-                source_bytes_modified: false,
-                persists_after_close: false,
-              },
-            }),
-          ),
-        );
+    const client = await connect(
+      {
+        execute: (_name, input) => {
+          parameters.push(input);
+          if (typeof input.comment === "string")
+            annotations.comment = input.comment;
+          if (typeof input.inline_comment === "string")
+            annotations.inline_comment = input.inline_comment;
+          return Promise.resolve(
+            observed(
+              jsonValueSchema.parse({
+                annotations,
+                dossier,
+                effects: {
+                  scope: "session-analysis-database",
+                  source_bytes_modified: false,
+                  persists_after_close: false,
+                },
+              }),
+            ),
+          );
+        },
       },
-    });
+      [
+        {
+          name: "annotate_native_function",
+          arguments: { procedure: annotations.address, inline_comment: "" },
+        },
+      ],
+    );
     const reply = await client.callTool({
       name: "annotate_native_function",
       arguments: { procedure: annotations.address, inline_comment: "" },

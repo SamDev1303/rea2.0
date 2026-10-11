@@ -1,3 +1,7 @@
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
@@ -17,8 +21,19 @@ afterEach(async () => {
   );
 });
 
-const connect = async (analysis: AnalysisOperationPort) => {
+const connect = async (
+  analysis: AnalysisOperationPort,
+  requests: readonly OwnedMcpFixtureRequest[] = [
+    { name: "list_documents", arguments: {} },
+  ],
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  try {
+    await attachNonexecutingMcpFixture(server, analysis, requests);
+  } catch (cause) {
+    await server.close();
+    throw cause;
+  }
   const client = new Client({
     name: "integration-test",
     version: "1.0.0",
@@ -104,18 +119,21 @@ it("preserves distinct results across concurrent tool calls", async () => {
   const started = new Promise<void>((resolve) => {
     allStarted = resolve;
   });
-  const client = await connect({
-    execute: async (name) => {
-      const payload = payloads.get(name);
-      if (payload === undefined)
-        throw new Error(`Unexpected operation: ${name}`);
-      await new Promise<void>((resolve) => {
-        pending.set(name, resolve);
-        if (pending.size === payloads.size) allStarted();
-      });
-      return ok(payload);
+  const client = await connect(
+    {
+      execute: async (name) => {
+        const payload = payloads.get(name);
+        if (payload === undefined)
+          throw new Error(`Unexpected operation: ${name}`);
+        await new Promise<void>((resolve) => {
+          pending.set(name, resolve);
+          if (pending.size === payloads.size) allStarted();
+        });
+        return ok(payload);
+      },
     },
-  });
+    [...payloads.keys()].map((name) => ({ name, arguments: {} })),
+  );
   const names = [...payloads.keys()];
   const requests = names.map((name) =>
     client.callTool({ name, arguments: {} }),

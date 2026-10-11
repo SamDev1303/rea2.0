@@ -26,6 +26,38 @@ const runCli = async (arguments_: readonly string[]): Promise<unknown> => {
 };
 
 describe("CLI JSON file selection", () => {
+  it("checks the selected JSON file and typed secondary acquisition paths before use", async () => {
+    const root = await createTestTempDirectory("rea-json-protected-");
+    const protectedFile = join(root, "keys.md.backup");
+    await writeFile(protectedFile, "SYNTHETIC_CREDENTIAL_SENTINEL");
+    await expect(
+      parseCliJsonInput(protectedFile, "import_reference_source"),
+    ).rejects.toThrow("protected input or output path");
+    await expect(
+      parseCliJsonInput(
+        JSON.stringify({ capture_path: protectedFile }),
+        "export_web_scripts",
+      ),
+    ).rejects.toThrow("protected input or output path");
+    const input = join(root, "input.json");
+    await writeFile(
+      input,
+      JSON.stringify({ output_directory: "~/Sync/secrets" }),
+    );
+    await expect(
+      parseCliJsonInput(input, "export_web_scripts"),
+    ).rejects.toThrow("protected input or output path");
+    await expect(
+      parseCliJsonInput(
+        JSON.stringify({
+          source: { description: protectedFile },
+          findings: [{ description: protectedFile }],
+        }),
+        "reconcile_investigation",
+      ),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   it("accepts a symlink to a regular JSON file", async () => {
     const root = await createTestTempDirectory("rea-json-input-symlink-");
     const path = join(root, "input.json");

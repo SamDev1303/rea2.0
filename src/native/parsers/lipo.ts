@@ -124,7 +124,7 @@ const CPU_SUBTYPES: Readonly<Record<string, number>> = {
 /** Normalize known lipo names while retaining the producer's original text. */
 const cpuTypeCode = (value: string | undefined): number | null => {
   if (value === undefined) return null;
-  const numeric = unsigned32(value);
+  const numeric = printedUnsigned32(value);
   return numeric ?? CPU_TYPES[value] ?? null;
 };
 
@@ -134,11 +134,14 @@ const cpuSubtypeCode = (
   capabilities: string | undefined,
 ): number | null => {
   if (value === undefined) return null;
-  const numeric = unsigned32(value);
-  if (numeric !== null) return numeric;
-  const subtype = CPU_SUBTYPES[value];
+  const numeric = printedUnsigned32(value.replace(/^cpusubtype\s+/u, ""));
+  const subtype = numeric ?? CPU_SUBTYPES[value];
   if (subtype === undefined) return null;
-  if (value !== "CPU_SUBTYPE_ARM64E") return subtype;
+  if (
+    value !== "CPU_SUBTYPE_ARM64E" &&
+    (numeric === null || !capabilities?.includes("PTR_AUTH_VERSION"))
+  )
+    return subtype;
   const version = /PTR_AUTH_VERSION\s+USERSPACE\s+(\d+)/u.exec(
     capabilities ?? "",
   )?.[1];
@@ -152,6 +155,9 @@ const cpuSubtypeCode = (
     return null;
   return (0x80000000 | (parsedVersion << 24) | subtype) >>> 0;
 };
+
+const printedUnsigned32 = (value: string): number | null =>
+  unsigned32(/^\((\d+)\)$/u.exec(value)?.[1] ?? value);
 
 const unsigned32 = (value: string): number | null => {
   if (!/^(?:\d+|0x[\da-f]+)$/iu.test(value)) return null;

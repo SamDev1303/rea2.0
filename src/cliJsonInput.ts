@@ -1,3 +1,4 @@
+import { admitInvestigationPaths } from "./application/investigationSafety/InvestigationAdmission.js";
 import { resolve } from "node:path";
 
 import { readJsonInputFile } from "./application/JsonInputFile.js";
@@ -14,14 +15,26 @@ import { safeParseJson } from "./domain/safeJson.js";
 export const parseCliJsonInput = async (
   value: string,
   operation: string,
+): ReturnType<typeof parseCliJsonInputUsingReader> =>
+  parseCliJsonInputUsingReader(value, operation, readJsonInputFile);
+
+/** Shared classification mechanics; production supplies its protected file reader. */
+export const parseCliJsonInputUsingReader = async (
+  value: string,
+  operation: string,
+  readInput: typeof readJsonInputFile,
 ): Promise<
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: JsonValue }
 > => {
   const inline = safeParseJson(value);
-  if (inline.ok) return { ok: true, value: inline.value };
+  if (inline.ok) {
+    await admitInvestigationPaths(operation, inline.value);
+    return { ok: true, value: inline.value };
+  }
   try {
-    const parsed = await readJsonInputFile(value, operation);
+    const parsed = await readInput(value, operation);
+    if (parsed.ok) await admitInvestigationPaths(operation, parsed.value);
     return parsed.ok
       ? { ok: true, value: parsed.value }
       : {

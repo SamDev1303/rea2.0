@@ -2,6 +2,10 @@ import { Cli } from "incur";
 import { describe, expect, it } from "vitest";
 
 import { createCli } from "../../../src/cli.js";
+import { serveRegisteredCliFixture } from "../../support/cli/registeredCliFixture.js";
+import { registerUtilityCommands } from "../../../src/cli/utilityCommands.js";
+import { silentLogger } from "../../../src/logger.js";
+import { AnalysisInputError } from "../../../src/domain/analysisErrorCore.js";
 import { createCliInventory } from "../../../scripts/lib/catalog-cli.mjs";
 
 type CliInstance = ReturnType<typeof createCli>;
@@ -72,6 +76,49 @@ describe("CLI option aliases", () => {
       "--json",
     ]);
     expect(result.stdout).not.toContain("Unknown flag");
-    expect(result.stdout).toContain("/nonexistent/REA.app");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      code: "capability_unavailable",
+    });
+    const selected: unknown[] = [];
+    const parsed = await serveRegisteredCliFixture(
+      (fixture) => {
+        registerUtilityCommands(
+          fixture,
+          silentLogger,
+          {},
+          {
+            runSessionStatus: async () => {
+              throw new Error("No status acquisition permitted");
+            },
+            runProviderAnalysis: async (path, operation, parameters) => {
+              selected.push({ path, operation, parameters });
+              throw new AnalysisInputError(operation, undefined, [
+                {
+                  path: ["path"],
+                  reason: "invalid_value",
+                  message: `Declared synthetic target ${path} is absent`,
+                },
+              ]);
+            },
+          },
+        );
+      },
+      [
+        "inspect-plist",
+        "/nonexistent/REA.app",
+        "--relative-path",
+        "Contents/Info.plist",
+        "--json",
+      ],
+    );
+    expect(parsed.stdout).not.toContain("Unknown flag");
+    expect(parsed.stdout).toContain("/nonexistent/REA.app");
+    expect(selected).toEqual([
+      {
+        path: "/nonexistent/REA.app",
+        operation: "inspect_plist",
+        parameters: { path: "Contents/Info.plist" },
+      },
+    ]);
   });
 });

@@ -9,6 +9,7 @@ import {
   expectValidTypeScriptInput,
 } from "../../fixtures/javascriptArtifactTypeScriptDialect.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { analyzeJavaScriptApplication } from "../../support/javascriptApplicationScope.js";
 
 for (const format of ["directory", "asar"] as const) {
   for (const command of ["analyze-javascript-application", "analyze"]) {
@@ -22,9 +23,18 @@ for (const format of ["directory", "asar"] as const) {
           typeScriptDialectCases,
         );
         const output = await cli.run({ arguments: [command, input, "--json"] });
-        expect(output.exitCode).toBe(0);
+        let evidence = output.json;
+        if (format === "asar") {
+          expect(output.exitCode).toBe(1);
+          expect(output.json).toMatchObject({ code: "capability_unavailable" });
+          const analysed = await analyzeJavaScriptApplication({
+            input_path: input,
+          });
+          if (!analysed.ok) throw analysed.error;
+          evidence = analysed.value;
+        } else expect(output.exitCode).toBe(0);
         const result = javascriptApplicationAnalysisResultSchema.parse(
-          parseEvidence(output.json).normalized_result,
+          parseEvidence(evidence).normalized_result,
         );
         expect(result.statistics).toMatchObject({
           parse_failures: 0,

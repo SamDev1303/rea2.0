@@ -6,7 +6,7 @@ import {
   realpath,
   type FileHandle,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Readable } from "node:stream";
 
 import {
@@ -17,6 +17,14 @@ import {
 import { OwnedDirectoryHandle } from "../filesystem/OwnedDirectoryHandle.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
 import { readFileHandleChunks } from "../filesystem/readFileHandleChunks.js";
+import {
+  assertOwnedStaticFixtureAcquisition,
+  assertOwnedStaticFixtureDescriptor,
+} from "../filesystem/OwnedStaticReadBoundary.js";
+import {
+  isProtectedHostPath,
+  isProtectedReferencePath,
+} from "../filesystem/ProtectedPaths.js";
 
 /** Non-symlink-following directory reader. */
 export class DirectoryArtifactReader implements ArtifactReader {
@@ -58,15 +66,14 @@ export class DirectoryArtifactReader implements ArtifactReader {
   }
 
   async #resolveRoot(): Promise<string> {
-    return (this.#rootPromise ??= realpath(this.#rootPath)).catch(
-      (cause: unknown) => {
-        throw directoryIoFailure(
-          "resolve artifact root",
-          this.#rootPath,
-          cause,
-        );
-      },
-    );
+    await assertOwnedStaticFixtureAcquisition(this.#rootPath, "metadata");
+    return (this.#rootPromise ??= realpath(this.#rootPath).then((root) => {
+      assertUnprotectedArtifactPath(this.#rootPath);
+      assertUnprotectedArtifactPath(root);
+      return root;
+    })).catch((cause: unknown) => {
+      throw directoryIoFailure("resolve artifact root", this.#rootPath, cause);
+    });
   }
 
   async *#readDirectory(
@@ -76,6 +83,7 @@ export class DirectoryArtifactReader implements ArtifactReader {
     descendInto?: (path: string) => boolean,
   ): AsyncIterable<ArtifactEntry> {
     const root = await this.#resolveRoot();
+    await assertOwnedStaticFixtureAcquisition(directory, "directory");
     const handle = new OwnedDirectoryHandle(
       await opendir(directory).catch((cause: unknown) => {
         throw directoryIoFailure("open directory", directory, cause);
@@ -94,10 +102,14 @@ export class DirectoryArtifactReader implements ArtifactReader {
         if (child === null) break;
         abortIfNeeded(signal);
         const absolute = join(directory, child.name);
+        const path = relative(root, absolute).split(sep).join("/");
+        if (isProtectedReferencePath(path)) throw protectedArtifactFailure();
+        await assertOwnedStaticFixtureAcquisition(absolute, "metadata");
         const metadata = await lstat(absolute).catch((cause: unknown) => {
           throw directoryIoFailure("inspect entry", absolute, cause);
         });
-        const path = relative(root, absolute).split(sep).join("/");
+        if (metadata.isFile() && metadata.nlink > 1)
+          throw multipleAliasesFailure();
         const entry = artifactEntry(path, absolute, metadata);
         if (entry === undefined) continue;
         yield entry;
@@ -148,6 +160,24 @@ export class DirectoryArtifactReader implements ArtifactReader {
         "format",
         "Only regular files can be opened",
       );
+    const root = await this.#resolveRoot();
+    assertUnprotectedArtifactPath(entry.adapterKey);
+    if (isProtectedReferencePath(entry.path)) throw protectedArtifactFailure();
+    await assertOwnedStaticFixtureAcquisition(entry.adapterKey, "metadata");
+    const canonical = await realpath(entry.adapterKey);
+    assertUnprotectedArtifactPath(canonical);
+    const selectedPath = relative(root, canonical);
+    if (
+      selectedPath === ".." ||
+      selectedPath.startsWith(`..${sep}`) ||
+      isAbsolute(selectedPath)
+    )
+      throw new ArtifactReaderFailure(
+        "path",
+        "Artifact entry is outside its approved root",
+      );
+    await assertContainedDirectory(root, dirname(entry.adapterKey));
+    await assertOwnedStaticFixtureAcquisition(entry.adapterKey, "file");
     const fileHandle = await open(
       entry.adapterKey,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -164,6 +194,8 @@ export class DirectoryArtifactReader implements ArtifactReader {
           cause,
         );
       });
+      await assertOwnedStaticFixtureDescriptor(entry.adapterKey, observed);
+      if (observed.nlink > 1) throw multipleAliasesFailure();
       if (
         !observed.isFile() ||
         entry.sourceIdentity === undefined ||
@@ -251,6 +283,22 @@ export class DirectoryArtifactReader implements ArtifactReader {
     return [];
   }
 }
+
+const protectedArtifactFailure = (): ArtifactReaderFailure =>
+  new ArtifactReaderFailure(
+    "path",
+    "Protected artifact paths are outside static ingestion scope. Use a sanitised source snapshot or reference-source import with mandatory exclusions.",
+  );
+
+const multipleAliasesFailure = (): ArtifactReaderFailure =>
+  new ArtifactReaderFailure(
+    "path",
+    "Static artifact ingestion cannot verify multiple file aliases. Use a sanitised source snapshot with independent regular files.",
+  );
+
+const assertUnprotectedArtifactPath = (path: string): void => {
+  if (isProtectedHostPath(path)) throw protectedArtifactFailure();
+};
 
 const artifactEntry = (
   path: string,
@@ -357,6 +405,7 @@ const assertContainedDirectory = async (
   root: string,
   directory: string,
 ): Promise<void> => {
+  await assertOwnedStaticFixtureAcquisition(directory, "metadata");
   const canonical = await realpath(directory);
   const fromRoot = relative(root, canonical);
   const metadata = await lstat(directory);

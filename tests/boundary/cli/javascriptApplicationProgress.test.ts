@@ -27,7 +27,10 @@ for (const command of ["analyze-javascript-application", "analyze"]) {
     async ({ cli }) => {
       const root = await createTestTempDirectory("rea-js-cli-progress-");
       await writeFile(join(root, "main.js"), "fetch('');\n");
-      const direct = await analyzeJavaScriptApplication({ input_path: root });
+      const direct = await analyzeJavaScriptApplication({
+        input_path: root,
+        ...(command === "analyze" ? { format: "directory" } : {}),
+      });
       if (!direct.ok) throw direct.error;
 
       const output = await cli.run({ arguments: [command, root, "--json"] });

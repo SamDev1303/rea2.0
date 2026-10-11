@@ -1,3 +1,4 @@
+// Historical upstream distribution fixture. REA 2.0 verifies local setup with verify-local-setup.mjs.
 import {
   lstat,
   mkdir,
@@ -703,6 +704,10 @@ export async function verifyPackageSetup({
   hopperSetupSupported,
   root,
 }) {
+  if (PRODUCT_IDENTITY.packageName === "rea2-local")
+    throw new Error(
+      "Historical package setup is unavailable for local REA 2.0. Run verify-local-setup.mjs; bundled installation and npx registration are disabled.",
+    );
   await verifyMcpAdd({ cli, environment, npxLog });
   const skillPath = join(
     home,

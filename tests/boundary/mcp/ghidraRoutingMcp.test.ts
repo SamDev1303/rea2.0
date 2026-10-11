@@ -1,6 +1,7 @@
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { describe, expect, it } from "vitest";
 import { connectGhidraMcp } from "./ghidraMcpHarness.js";
+import { buildCapabilityInventory } from "../../../src/application/CapabilityInventory.js";
 
 describe("Ghidra MCP capability routing", () => {
   it("routes composed and capability tools", async () => {
@@ -47,34 +48,57 @@ describe("Ghidra MCP capability routing", () => {
           analysis_provider_binding: {
             provider: { id: "ghidra", version: "12.1.4" },
           },
+        },
+      });
+      // Provider capability composition is verified independently of protected-host presentation.
+      expect(
+        buildCapabilityInventory(harness.session.status(), {
+          processCaptureEnabled: process.platform !== "win32",
+        }),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "binary_overview",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "get_objc_classes",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "batch_decompile",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "trace_feature",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "get_call_graph",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "find_xrefs_to_name",
+            available: true,
+          }),
+          expect.objectContaining({
+            name: "set_comment",
+            available: false,
+          }),
+        ]),
+      );
+      expect(status.structuredContent).toMatchObject({
+        result: {
           tool_availability: expect.arrayContaining([
             expect.objectContaining({
-              name: "binary_overview",
-              available: true,
-            }),
-            expect.objectContaining({
-              name: "get_objc_classes",
-              available: true,
-            }),
-            expect.objectContaining({
               name: "batch_decompile",
-              available: true,
-            }),
-            expect.objectContaining({
-              name: "trace_feature",
-              available: true,
-            }),
-            expect.objectContaining({
-              name: "get_call_graph",
-              available: true,
-            }),
-            expect.objectContaining({
-              name: "find_xrefs_to_name",
-              available: true,
+              available: false,
+              reason: "unsupported_host",
             }),
             expect.objectContaining({
               name: "set_comment",
               available: false,
+              reason: "unsupported_host",
             }),
           ]),
         },

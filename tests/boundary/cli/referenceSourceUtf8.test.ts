@@ -12,6 +12,7 @@ cliTest(
   "retains malformed source bytes without inventing decoded import targets",
   async ({ cli }) => {
     const root = await createTestTempDirectory("rea-reference-utf8-");
+    const home = await createTestTempDirectory("rea-fixture-config-home-");
     const sources = new Map([
       [
         "invalid.mjs",
@@ -37,7 +38,7 @@ cliTest(
     );
     const result = await cli.run({
       arguments: ["import-reference-source", root, "--json"],
-      environment: { HOME: root, XDG_CONFIG_HOME: root, XDG_CACHE_HOME: root },
+      environment: { HOME: home, XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home },
     });
     expect(result.exitCode).toBe(0);
     const graph = historicalSourceGraphSchema.parse(result.json);

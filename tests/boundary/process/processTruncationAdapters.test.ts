@@ -14,13 +14,38 @@ import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { itWithCaptureCapability } from "./processCaptureCapability.js";
+import { createTestProcessRegistry } from "../../support/process/processFixture.js";
+import { runOwnedCliFixture } from "../../support/investigation/ownedCliFixture.js";
+import { attachOwnedTimedMcpFixture } from "../../support/investigation/ownedTimedProcessFixture.js";
+import { prepareOwnedSparseProcessFixture } from "../../support/investigation/ownedSparseProcessFixture.js";
+import { silentLogger } from "../../../src/logger.js";
+import {
+  prepareOwnedProcessController,
+  captureOwnedProcessCli,
+  connectOwnedProcessReadback,
+} from "../../support/process/ownedProcessController.js";
+import type { OwnedProcessSelection } from "../../support/process/ownedProcessTemplates.mjs";
 
 const exec = promisify(execFile);
 const capture = async (
   adapter: "cli" | "mcp",
   scenario: Record<string, unknown>,
+  ownedFixture?: Awaited<ReturnType<typeof prepareOwnedSparseProcessFixture>>,
 ) => {
   if (adapter === "cli") {
+    if (ownedFixture !== undefined) {
+      const processes = createTestProcessRegistry();
+      onTestFinished(() => processes.shutdown());
+      const captured = await runOwnedCliFixture(processes, {
+        policy: ownedFixture.policy,
+        arguments: ["capture-process", ownedFixture.scenario, "--json"],
+        cwd: ownedFixture.root,
+      });
+      expect(captured.exitCode, captured.stdout || captured.stderr).toBe(0);
+      return parseProcessCapture(
+        parseEvidence(captured.json).normalized_result,
+      );
+    }
     const path = join(
       await createTestTempDirectory("rea-truncation-scenario-"),
       "scenario.json",
@@ -40,7 +65,10 @@ const capture = async (
   const session = createTestBinarySession(() => {
     throw new Error("Capture must not launch a binary provider");
   });
-  const server = createServer({ kind: "session", session });
+  const server = createServer(
+    { kind: "session", session },
+    ownedFixture === undefined ? {} : { environment: {}, logger: silentLogger },
+  );
   const client = new Client({ name: "truncation-coverage", version: "1" });
   onTestFinished(async () => {
     await client.close();
@@ -49,6 +77,8 @@ const capture = async (
   });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
+  if (ownedFixture !== undefined)
+    await attachOwnedTimedMcpFixture(server, ownedFixture);
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   const result = await client.callTool({
@@ -62,25 +92,32 @@ const capture = async (
   );
 };
 
+const captureMaintained = async (
+  adapter: "cli" | "mcp",
+  selection: OwnedProcessSelection,
+) => {
+  const controller = await prepareOwnedProcessController(selection);
+  onTestFinished(controller.dispose);
+  if (adapter === "cli")
+    return parseProcessCapture(
+      parseEvidence(await captureOwnedProcessCli(controller)).normalized_result,
+    );
+  const readback = await connectOwnedProcessReadback();
+  onTestFinished(readback.close);
+  return parseProcessCapture(
+    (await readback.capture(controller)).normalized_result,
+  );
+};
+
 itWithCaptureCapability.each(["cli", "mcp"] as const)(
   "localizes sparse rendered-state exhaustion through %s",
   async (adapter) => {
-    const root = await createTestTempDirectory("rea-rendered-budget-");
-    const result = await capture(adapter, {
-      executable: process.execPath,
-      working_directory: root,
-      arguments: [
-        "-e",
-        "let n=0;const timer=setInterval(()=>{console.log('board '+String(n).padStart(2,'0')+' completed; score '+String(n*10));if(++n===65)clearInterval(timer)},20)",
-      ],
-      normalization: {
-        ports: false,
-        pids: false,
-        paths: false,
-        time_bucket_ms: 1,
-      },
-      limits: { output_bytes: 30_000 },
-    });
+    const fixture = await prepareOwnedSparseProcessFixture(adapter);
+    const result = await capture(adapter, fixture.input, fixture);
+    expect(result.manifest.scenario.arguments).toEqual([
+      "--max-old-space-size=64",
+      fixture.input.arguments[1],
+    ]);
     const details = result.truncation_details;
     if (details === undefined) throw new Error("Expected producer coverage");
     expect(result.frames.map(({ data }) => data).join("")).toContain(
@@ -162,15 +199,9 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
     const root = await createTestTempDirectory("rea-raw-files-budget-");
     await writeFile(join(root, "a.txt"), "abc");
     await writeFile(join(root, "b.txt"), "12345678");
-    const result = await capture(adapter, {
-      executable: process.execPath,
-      working_directory: root,
-      arguments: [
-        "-e",
-        "process.stdout.write('x'.repeat(1000));require('node:fs').writeFileSync('c.txt','new');setTimeout(()=>{},100)",
-      ],
-      filesystem_observation_paths: [root],
-      limits: { output_bytes: 50, files: 3, file_bytes: 4 },
+    const result = await captureMaintained(adapter, {
+      template: "raw-files",
+      root,
     });
     const details = result.truncation_details;
     if (details === undefined) throw new Error("Expected producer coverage");
@@ -220,12 +251,9 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
     await writeFile(join(root, "a.txt"), "abc");
     await writeFile(join(root, "b.txt"), "12345678");
     await writeFile(join(root, "c.txt"), "z");
-    const result = await capture(adapter, {
-      executable: process.execPath,
-      working_directory: root,
-      arguments: ["-e", "console.log('done');setTimeout(()=>{},100)"],
-      filesystem_observation_paths: [root],
-      limits: { file_bytes: 4 },
+    const result = await captureMaintained(adapter, {
+      template: "digest-only",
+      root,
     });
     expect(result.truncation_details?.filesystem_after).toMatchObject({
       enumeration_truncated: false,
@@ -267,14 +295,9 @@ itWithCaptureCapability.each(["cli", "mcp"] as const)(
   "reports process sample-limit exhaustion without erasing other dimensions through %s",
   async (adapter) => {
     const root = await createTestTempDirectory("rea-process-budget-");
-    const result = await capture(adapter, {
-      executable: process.execPath,
-      working_directory: root,
-      arguments: [
-        "-e",
-        "setTimeout(()=>require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},800)'],{stdio:'ignore'}),100);console.log('ready')",
-      ],
-      limits: { processes: 1 },
+    const result = await captureMaintained(adapter, {
+      template: "sample-limit",
+      root,
     });
     expect(result.truncation_details?.process).toMatchObject({
       sample_limit: 1,

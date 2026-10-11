@@ -1,30 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.morluto/rea",
-  "title": "REA",
-  "description": "Reverse engineer anything from your terminal or agent with one CLI and MCP server.",
-  "websiteUrl": "https://github.com/morluto/rea",
+  "name": "io.github.SamDev1303/rea2",
+  "title": "REA 2.0",
+  "description": "Local CLI and MCP for evidence-led investigations and independent rebuilding. Not published to a registry.",
+  "websiteUrl": "https://github.com/SamDev1303/rea2.0",
   "repository": {
-    "url": "https://github.com/morluto/rea",
+    "url": "https://github.com/SamDev1303/rea2.0",
     "source": "github"
   },
-  "version": "6.4.0",
-  "packages": [
-    {
-      "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "rea-agents",
-      "version": "6.4.0",
-      "runtimeHint": "npx",
-      "transport": {
-        "type": "stdio"
-      },
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "mcp"
-        }
-      ]
-    }
-  ]
+  "version": "6.4.0"
 }

@@ -41,6 +41,9 @@ export type ClientConfigurationInspection =
     };
 /** Effects required by the idempotent, non-blocking setup workflow. */
 export interface SetupHost {
+  /** Production limits are fixed by the owned host, never by inspected content. */
+  readonly engineInstallationDisabled?: boolean;
+  readonly skillManagedExternally?: boolean;
   readonly platform: NodeJS.Platform;
   readonly homeDirectory: string;
   skillDestinations(clientIds: readonly string[]): readonly SkillDestination[];

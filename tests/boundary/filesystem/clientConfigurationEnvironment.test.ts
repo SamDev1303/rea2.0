@@ -1,3 +1,4 @@
+import { localRegistrationCommand } from "../../../src/application/ClientRegistrationIdentity.js";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -36,7 +37,7 @@ it.each([
     const original = serializeClientConfiguration(
       {
         [serversKey]: {
-          rea: clientRegistrationEntry(format, ["rea-old", "mcp"], custom),
+          rea2: clientRegistrationEntry(format, ["rea-old", "mcp"], custom),
           other: clientRegistrationEntry(format, ["other"], { OTHER: "keep" }),
         },
       },
@@ -44,7 +45,7 @@ it.each([
     );
     await writeFile(configPath, original);
     const providers = { GHIDRA_INSTALL_DIR: join(root, "new-ghidra") };
-    const command = ["rea", "mcp"];
+    const command = localRegistrationCommand();
     expect(
       await inspectClientConfiguration(client, providers, command),
     ).toMatchObject({ status: "update" });
@@ -53,7 +54,7 @@ it.each([
     ).toMatchObject({ status: "configured" });
     const configured = await readFile(configPath, "utf8");
     const parsed = parseClientConfiguration(configured, format);
-    expect(effectiveClientServer(parsed, "rea")).toMatchObject({
+    expect(effectiveClientServer(parsed, "rea2")).toMatchObject({
       [environmentKey]: { ...custom, ...providers },
     });
     expect(effectiveClientServer(parsed, "other")).toEqual(
@@ -85,7 +86,7 @@ it("retains legacy OpenCode environment when migrating into a native server tabl
     configPath,
     JSON.stringify({
       mcp: {
-        rea: clientRegistrationEntry("opencode", ["old", "mcp"], custom),
+        rea2: clientRegistrationEntry("opencode", ["old", "mcp"], custom),
         servers: {
           other: clientRegistrationEntry("opencode_v2", ["other"], {}),
         },
@@ -93,18 +94,18 @@ it("retains legacy OpenCode environment when migrating into a native server tabl
     }),
   );
   expect(
-    await configureClientConfiguration(client, {}, ["rea", "mcp"]),
+    await configureClientConfiguration(client, {}, localRegistrationCommand()),
   ).toMatchObject({ status: "configured" });
   const parsed = parseClientConfiguration(
     await readFile(configPath, "utf8"),
     "opencode",
   );
   expect(parsed.legacyServers).toEqual({});
-  expect(parsed.servers.rea).toEqual(
-    clientRegistrationEntry("opencode_v2", ["rea", "mcp"], custom),
+  expect(parsed.servers.rea2).toEqual(
+    clientRegistrationEntry("opencode_v2", localRegistrationCommand(), custom),
   );
   expect(
-    await configureClientConfiguration(client, {}, ["rea", "mcp"]),
+    await configureClientConfiguration(client, {}, localRegistrationCommand()),
   ).toEqual({ status: "unchanged" });
 });
 
@@ -150,23 +151,27 @@ it.each([
     const configPath = join(directory, "mcp.json");
     await mkdir(directory);
     const original = JSON.stringify({
-      mcpServers: { rea: { command: "rea", args: ["mcp"], env } },
+      mcpServers: { rea2: { command: "rea2", args: ["mcp"], env } },
     });
     await writeFile(configPath, original);
     const client = { name: "cursor", format: "json", configPath } as const;
     expect(
-      await inspectClientConfiguration(client, {}, ["rea", "mcp"]),
+      await inspectClientConfiguration(client, {}, localRegistrationCommand()),
     ).toMatchObject({
       status: "invalid",
       remediation: expect.stringContaining(setting),
     });
     expect(
-      await configureClientConfiguration(client, {}, ["rea", "mcp"]),
+      await configureClientConfiguration(
+        client,
+        {},
+        localRegistrationCommand(),
+      ),
     ).toEqual({ status: "failed", reason: "readback" });
-    expect(await clientConfigurationAligned(client, {}, ["rea", "mcp"])).toBe(
-      false,
-    );
-    const statuses = await readClientRegistrationStatuses(home, "rea", {
+    expect(
+      await clientConfigurationAligned(client, {}, localRegistrationCommand()),
+    ).toBe(false);
+    const statuses = await readClientRegistrationStatuses(home, "rea2", {
       environment: {},
     });
     expect(statuses.find(({ client }) => client === "cursor")).toMatchObject({

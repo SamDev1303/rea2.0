@@ -89,6 +89,8 @@ export type TraversalState = {
   readonly entries: ReferenceSourceEntry[];
   readonly pending: PendingDirectory[];
   bytesRead: number;
+  visitedEntries: number;
+  readonly deadline: number;
 };
 
 export type StableFileRequest = {

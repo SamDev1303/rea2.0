@@ -1,3 +1,10 @@
+import { analyzeJavaScriptApplication } from "../../../src/application/javascript/JavaScriptApplicationService.js";
+import { ArtifactResourceScope } from "../../../src/artifacts/ArtifactResourceScope.js";
+import { ToolResultDelivery } from "../../../src/server/toolResult.js";
+import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
+import { toolContract } from "../../../src/contracts/toolContracts.js";
+import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
+import type { ApplicationMcpHarness } from "../../fixtures/applicationMcpHarness.js";
 import { appendFile, cp } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -14,18 +21,18 @@ import type { FixtureClaimExpectation } from "../../../src/evaluation/KnownAnswe
 import { createApplicationMcpHarness } from "../../fixtures/applicationMcpHarness.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
-describe("packaged application known-answer evaluation", () => {
-  it("grades real packaged bytes and rejects false values, extra claims, and unrelated citations", async () => {
+describe("owned packaged source-produced known-answer evaluation", () => {
+  it("grades owned packaged bytes from the direct producer and rejects false values, extra claims, and unrelated citations", async () => {
     const root = await createTestTempDirectory("rea-known-answer-asar-");
     const targets = await createAgentEvaluationFixtures(root, resolve("."));
     const claims = agentFixtureClaims("asar", targets);
     if (claims === undefined) throw new Error("Missing ASAR rubric");
     const harness = await createApplicationMcpHarness();
     try {
-      const result = await harness.client.callTool({
-        name: "analyze_javascript_application",
-        arguments: { input_path: targets.javascript },
-      });
+      const result = await produceOwnedPackagedResult(
+        harness,
+        targets.javascript,
+      );
       expect(result.isError).not.toBe(true);
       const evidence = resultEvidence(result);
       const events = [
@@ -100,10 +107,7 @@ describe("packaged application known-answer evaluation", () => {
     await cp(targets.javascript, unrelated);
     const harness = await createApplicationMcpHarness();
     try {
-      const result = await harness.client.callTool({
-        name: "analyze_javascript_application",
-        arguments: { input_path: unrelated },
-      });
+      const result = await produceOwnedPackagedResult(harness, unrelated);
       const manifest = claimManifest(claims, resultEvidence(result));
       const events = [
         toolEvent("unrelated", "analyze_javascript_application", result),
@@ -118,7 +122,7 @@ describe("packaged application known-answer evaluation", () => {
   });
 });
 
-describe("known-answer packaged artifact digest binding", () => {
+describe("source-produced packaged artifact digest binding", () => {
   it("rejects the same known facts when the target bytes change at the same path", async () => {
     const root = await createTestTempDirectory("rea-known-answer-digest-");
     const targets = await createAgentEvaluationFixtures(root, resolve("."));
@@ -131,10 +135,10 @@ describe("known-answer packaged artifact digest binding", () => {
     await createPackage(join(root, "desktop-app"), targets.javascript);
     const harness = await createApplicationMcpHarness();
     try {
-      const result = await harness.client.callTool({
-        name: "analyze_javascript_application",
-        arguments: { input_path: targets.javascript },
-      });
+      const result = await produceOwnedPackagedResult(
+        harness,
+        targets.javascript,
+      );
       const evidence = resultEvidence(result);
       expect(evidence.subject?.digest.sha256).not.toBe(
         targets.javascriptSha256,
@@ -249,6 +253,7 @@ const resultEvidence = (result: {
   readonly structuredContent?: unknown;
 }): Evidence => parseEvidence(result.structuredContent);
 
+/** Synthetic evaluator inputs; these are not captured agent-session events. */
 const toolEvent = (id: string, tool: string, result: unknown) => ({
   type: "item.completed",
   item: {
@@ -291,3 +296,37 @@ const grade = (
     firstTool,
     { fixtureClaims },
   );
+
+/** Real owned-package producer Evidence, encoded for synthetic evaluator events; no successful transport receipt is claimed. */
+const produceOwnedPackagedResult = async (
+  harness: ApplicationMcpHarness,
+  path: string,
+) => {
+  const denied = await harness.client.callTool({
+    name: "analyze_javascript_application",
+    arguments: { input_path: path },
+  });
+  expect(denied.isError).toBe(true);
+  expect(parseMcpToolError(denied)).toMatchObject({
+    error: { code: "capability_unavailable" },
+  });
+  expect(harness.session.activeTarget()).toBeUndefined();
+  const scope = new ArtifactResourceScope();
+  try {
+    const produced = await analyzeJavaScriptApplication(
+      { input_path: path },
+      scope,
+    );
+    expect(produced.ok).toBe(true);
+    if (!produced.ok) throw produced.error;
+    expect(harness.session.recordEvidence(produced.value).ok).toBe(true);
+    return new ToolResultDelivery(
+      STDIO_DEFAULT_MAX_BUFFER_SIZE,
+    ).toCallToolResult(
+      produced,
+      toolContract("analyze_javascript_application"),
+    );
+  } finally {
+    await scope.close();
+  }
+};

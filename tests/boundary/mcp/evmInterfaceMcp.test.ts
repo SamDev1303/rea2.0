@@ -1,6 +1,8 @@
+import { retainOwnedServiceEvidence } from "../../fixtures/ownedServiceEvidence.js";
+import { assertOwnedFixturePublicDenial } from "../../fixtures/ownedArtifactProducer.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { EvmInterfaceService } from "../../../src/application/evm/EvmInterfaceService.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
@@ -12,10 +14,10 @@ import {
   evmInterfaceExecution,
 } from "../../fixtures/evm/interface.js";
 
-it("advertises exact valid schemas and records inline EVM interface evidence without a binary target", async () => {
+it("advertises exact valid schemas and retains direct synthetic EVM interface Evidence through MCP with public execution denied", async () => {
   const value = evmInterfaceFixture();
   const service = new EvmInterfaceService({
-    inspect: () => Promise.resolve(ok(evmInterfaceExecution(value))),
+    inspect: vi.fn(() => Promise.resolve(ok(evmInterfaceExecution(value)))),
   });
   const session = createTestBinarySession(() => {
     throw new Error("deep provider must not start");
@@ -54,17 +56,21 @@ it("advertises exact valid schemas and records inline EVM interface evidence wit
       approval: true,
     }),
   ).toBe(false);
-  const response = await client.callTool({
-    name: "inspect_evm_interface",
-    arguments: { path: value.artifact.path, encoding: "hex" },
+  await assertOwnedFixturePublicDenial(client, "inspect_evm_interface", {
+    path: value.artifact.path,
+    encoding: "hex",
   });
-  expect(response.isError).not.toBe(true);
-  expect(
-    ajv.validate(outputSchema, response.structuredContent),
-    JSON.stringify(ajv.errors),
-  ).toBe(true);
+  expect(service.provider.inspect).not.toHaveBeenCalled();
+  const response = await retainOwnedServiceEvidence(
+    session,
+    client,
+    await service.inspect({ path: value.artifact.path, encoding: "hex" }),
+  );
+  expect(ajv.validate(outputSchema, response), JSON.stringify(ajv.errors)).toBe(
+    true,
+  );
   const parsed = toolContract("inspect_evm_interface").outputSchema.parse(
-    response.structuredContent,
+    response,
   );
   const evidence = parseEvidence(parsed);
   expect(evidence.confidence).toBe("inferred");

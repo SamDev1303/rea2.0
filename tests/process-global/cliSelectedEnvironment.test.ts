@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createCli } from "../../src/cli.js";
+import { createDirectAnalysis } from "../../src/composition/directAnalysis.js";
 import { parseEvidence } from "../../src/domain/evidence.js";
 import { createTestTempDirectory } from "../fixtures/temporaryDirectory.js";
 
@@ -38,6 +39,7 @@ describe("CLI selected environment", () => {
       HOPPER_LAUNCHER_PATH: process.execPath,
     };
     const cli = createCli(environment);
+    const direct = createDirectAnalysis(environment);
     environment.REA_ANALYSIS_PROVIDER = "changed-provider";
     environment.HOPPER_LAUNCHER_PATH = "/changed/hopper";
     const root = await createTestTempDirectory("rea-cli-selected-env-");
@@ -48,7 +50,18 @@ describe("CLI selected environment", () => {
       ["decompile", target, "main"],
       ["read-bytes", target, "0x1000"],
     ]) {
-      const result = await serve(cli, command);
+      const denied = await serve(cli, command);
+      expect(denied).toMatchObject({ code: "capability_unavailable" });
+      // Authored inert .hop bytes reach the maintained factory; unknown selected
+      // provider rejects before any engine startup. Public host execution stays denied.
+      const result =
+        command[0] === "decompile"
+          ? await direct.runDirectAnalysis(target, "procedure_pseudo_code", {
+              procedure: "main",
+            })
+          : await direct.runDirectAnalysis(target, "read_bytes", {
+              address: "0x1000",
+            });
       expect(result).toMatchObject({
         code: "capability_unavailable",
         details: { requested_provider_id: "selected-provider" },
@@ -83,10 +96,19 @@ describe("CLI selected environment", () => {
       target,
       Buffer.from("504b0506000000000000000000000000000000000000", "hex"),
     );
-    const cli = createCli({
+    const selected = {
       REA_SELECTED_CAPTURE_SENTINEL: "selected-value-must-not-be-captured",
+    };
+    const cli = createCli(selected);
+    const direct = createDirectAnalysis(selected);
+    expect(await serve(cli, ["inspect-artifact", target])).toMatchObject({
+      code: "capability_unavailable",
     });
-    const result = await serve(cli, ["inspect-artifact", target]);
+    const result = await direct.runProviderAnalysis(
+      target,
+      "inspect_artifact",
+      {},
+    );
     const evidence = parseEvidence(result);
     expect(evidence.operation).toBe("inspect_artifact");
     expect(evidence.subject?.local_path).toBe(target);

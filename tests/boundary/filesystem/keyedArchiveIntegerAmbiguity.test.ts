@@ -8,6 +8,7 @@ import { keyedArchiveResultSchema } from "../../../src/domain/apple/keyedArchive
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { runOwnedKeyedArchiveCli } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const scenarios = [
   "integer-collision",
@@ -145,12 +146,9 @@ it.each(scenarios)(
 );
 cliTest.for(scenarios)(
   "built CLI retains numeric meaning for %s",
-  async (scenario, { cli }) => {
+  async (scenario, { processes }) => {
     const item = await fixture(scenario);
-    const output = await cli.run({
-      arguments: ["inspect-keyed-archive", item.path, "--json"],
-      environment: { REA_LOG_LEVEL: "silent", REA_ANALYSIS_PROVIDER: "auto" },
-    });
+    const output = await runOwnedKeyedArchiveCli(processes, item);
     expect(output.exitCode).toBe(0);
     verify(
       keyedArchiveResultSchema.parse(

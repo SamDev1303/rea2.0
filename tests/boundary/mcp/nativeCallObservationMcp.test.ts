@@ -1,10 +1,17 @@
-import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
+import {
+  retainOwnedServiceEvidence,
+  observeOwnedNativeFixture,
+} from "../../fixtures/ownedServiceEvidence.js";
+import {
+  assertOwnedFixturePublicDenial,
+  projectOwnedProducerError,
+} from "../../fixtures/ownedArtifactProducer.js";
 import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { nativeCallObservationResultSchema } from "../../../src/domain/native/nativeCallObservation.js";
@@ -84,7 +91,7 @@ const tracer: NativeCallTracer & { calls: number } = {
   close: () => Promise.resolve(ok(null)),
 };
 
-it("routes observe_native_calls through MCP with schema-checked input and output", async () => {
+it("retains direct authored-tracer native observations through MCP with schema-checked input and output while public execution is denied", async () => {
   const directory = await createTestTempDirectory("rea-native-calls-mcp-");
   const path = join(directory, "Tool");
   await writeFile(path, machoHeader());
@@ -103,25 +110,28 @@ it("routes observe_native_calls through MCP with schema-checked input and output
   try {
     await server.connect(serverTransport);
     await client.connect(clientTransport);
-    const opened = await client.callTool({
-      name: "open_binary",
-      arguments: { path },
-    });
-    expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
-    const called = await client.callTool({
-      name: "observe_native_calls",
-      arguments: {
-        breakpoints: [{ kind: "function", name: "open" }],
-        duration_ms: 1000,
-      },
-    });
-    expect(called.isError, JSON.stringify(called.structuredContent)).not.toBe(
-      true,
+    await assertOwnedFixturePublicDenial(client, "open_binary", { path });
+    expect(session.activeTarget()).toBeUndefined();
+    expect((await session.open(path)).ok).toBe(true);
+    const input = {
+      breakpoints: [{ kind: "function", name: "open" }],
+      duration_ms: 1000,
+    };
+    await assertOwnedFixturePublicDenial(client, "observe_native_calls", input);
+    expect(tracer.calls).toBe(0);
+    const called = await retainOwnedServiceEvidence(
+      session,
+      client,
+      await observeOwnedNativeFixture(
+        session,
+        path,
+        "observe_native_calls",
+        input,
+      ),
     );
     const result = nativeCallObservationResultSchema.parse(
-      z
-        .object({ normalized_result: z.unknown() })
-        .parse(called.structuredContent).normalized_result,
+      z.object({ normalized_result: z.unknown() }).parse(called)
+        .normalized_result,
     );
     expect(result.process).toMatchObject({ pid: 99, outcome: "exited" });
     expect(result.breakpoints[0]?.request).toEqual({
@@ -211,7 +221,7 @@ it.each([
     },
   ],
 ] as const)(
-  "preserves typed native partial observations over MCP after %s",
+  "preserves typed direct authored-tracer native partial observations after %s while public MCP execution is denied",
   async (_label, expectedCode, cleanup) => {
     const directory = await createTestTempDirectory(
       "rea-native-calls-partial-mcp-",
@@ -251,6 +261,7 @@ it.each([
           ),
         ),
     };
+    const trace = vi.spyOn(tracer, "trace");
     const session = createTestBinarySession(
       new NativeMacOSProvider(
         {},
@@ -269,25 +280,33 @@ it.each([
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
-      const opened = await client.callTool({
-        name: "open_binary",
-        arguments: { path },
-      });
-      expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
+      await assertOwnedFixturePublicDenial(client, "open_binary", { path });
+      expect(session.activeTarget()).toBeUndefined();
+      expect((await session.open(path)).ok).toBe(true);
 
-      const called = await client.callTool({
-        name: "observe_native_calls",
-        arguments: {
-          breakpoints: [{ kind: "function", name: "open" }],
-          arguments: launchArguments,
-          environment: launchEnvironment,
-          working_directory: workingDirectory,
-          duration_ms: 1000,
-        },
-      });
+      const input = {
+        breakpoints: [{ kind: "function", name: "open" }],
+        arguments: launchArguments,
+        environment: launchEnvironment,
+        working_directory: workingDirectory,
+        duration_ms: 1000,
+      };
+      await assertOwnedFixturePublicDenial(
+        client,
+        "observe_native_calls",
+        input,
+      );
+      expect(trace).not.toHaveBeenCalled();
+      const called = projectOwnedProducerError(
+        await observeOwnedNativeFixture(
+          session,
+          path,
+          "observe_native_calls",
+          input,
+        ),
+      );
 
-      expect(called.isError).toBe(true);
-      expect(parseMcpToolError(called)).toMatchObject({
+      expect(called).toMatchObject({
         error: {
           code: expectedCode,
           details: {

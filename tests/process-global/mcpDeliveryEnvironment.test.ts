@@ -1,16 +1,17 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
 import { afterEach, expect, it, vi } from "vitest";
-import { z } from "zod";
 
 import { createAnalysisExecution } from "../../src/application/AnalysisProvider.js";
 import { AnalysisInputError } from "../../src/domain/analysisErrorCore.js";
 import { jsonObjectSchema } from "../../src/domain/jsonValue.js";
-import { ok } from "../../src/domain/result.js";
+import { err, ok } from "../../src/domain/result.js";
 import { run } from "../../src/main.js";
 import { createServer } from "../../src/server/createServer.js";
 import type { EvidenceMcpServer } from "../../src/server/EvidenceMcpServer.js";
 import { parseMcpToolError } from "../fixtures/mcpToolError.js";
+import { attachNonexecutingMcpFixture } from "../support/investigation/ownedMcpFixture.js";
+import type { AnalysisOperationPort } from "../../src/application/AnalysisProvider.js";
 
 const resources: Array<{ close(): Promise<void> }> = [];
 afterEach(async () => {
@@ -34,20 +35,33 @@ it("keeps independent server budgets for successful results and oversized errors
   const smallEnvironment = { REA_MCP_MAX_RESPONSE_BYTES: String(smallBudget) };
   const largeEnvironment = { REA_MCP_MAX_RESPONSE_BYTES: String(largeBudget) };
   const payload = "x".repeat(3 * 1024 * 1024);
-  const analysis = {
-    execute: () =>
+  const diagnostic = "observed failure ".repeat(
+    Math.ceil((smallBudget + 65536) / 17),
+  );
+  const analysis: AnalysisOperationPort = {
+    execute: (_operation, parameters) =>
       Promise.resolve(
-        ok(
-          createAnalysisExecution(
-            payload,
-            {
-              id: "fixture",
-              name: "Fixture",
-              version: "1",
-            },
-            { rawResult: payload },
-          ),
-        ),
+        parameters.procedure === "failed"
+          ? err(
+              new AnalysisInputError("fixture", undefined, [
+                {
+                  path: ["procedure"],
+                  reason: "invalid_value",
+                  message: diagnostic,
+                },
+              ]),
+            )
+          : ok(
+              createAnalysisExecution(
+                payload,
+                {
+                  id: "fixture",
+                  name: "Fixture",
+                  version: "1",
+                },
+                { rawResult: payload },
+              ),
+            ),
       ),
   };
 
@@ -69,25 +83,12 @@ it("keeps independent server budgets for successful results and oversized errors
   largeEnvironment.REA_MCP_MAX_RESPONSE_BYTES = String(smallBudget);
   vi.stubEnv("REA_MCP_MAX_RESPONSE_BYTES", "invalid-ambient-after-selection");
 
-  // Error text alone exceeds the small budget and fits the large one.
-  const diagnostic = "observed failure ".repeat(
-    Math.ceil((smallBudget + 65536) / 17),
-  );
+  // Both success and failure travel through the same exact recording port.
   for (const server of [small, large])
-    server.registerTool(
-      "selected_failure",
-      { inputSchema: z.object({}) },
-      async () =>
-        server.delivery.toErrorToolResult(
-          new AnalysisInputError("fixture", undefined, [
-            {
-              path: ["procedure"],
-              reason: "invalid_value",
-              message: diagnostic,
-            },
-          ]),
-        ),
-    );
+    await attachNonexecutingMcpFixture(server, analysis, [
+      { name: "procedure_pseudo_code", arguments: { procedure: "main" } },
+      { name: "procedure_pseudo_code", arguments: { procedure: "failed" } },
+    ]);
 
   const [smallClient, largeClient] = await Promise.all([
     connect(small),
@@ -121,7 +122,10 @@ it("keeps independent server budgets for successful results and oversized errors
 
   const [smallFailure, largeFailure] = await Promise.all(
     [smallClient, largeClient].map((client) =>
-      client.callTool({ name: "selected_failure", arguments: {} }),
+      client.callTool({
+        name: "procedure_pseudo_code",
+        arguments: { procedure: "failed" },
+      }),
     ),
   );
   if (smallFailure === undefined || largeFailure === undefined)

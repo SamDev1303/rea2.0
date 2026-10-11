@@ -255,7 +255,11 @@ itWithCaptureCapability(
       code: "cleanup_incomplete",
       details: {
         cleanup: "incomplete",
-        resources: ["owned_process_group", "temporary_root"],
+        resources: [
+          "process_capture_lifecycle",
+          "owned_process_group",
+          "temporary_root",
+        ],
       },
     });
     expect(projected).not.toHaveProperty("stack");

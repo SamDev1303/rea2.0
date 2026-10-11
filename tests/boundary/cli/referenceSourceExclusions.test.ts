@@ -14,6 +14,7 @@ describe.skipIf(process.platform === "win32")(
       "reports project, default, and explicit secret exclusions",
       async ({ cli }) => {
         const root = await createTestTempDirectory("rea-reference-exclusions-");
+        const home = await createTestTempDirectory("rea-fixture-config-home-");
         const logs = join(root, "logs");
         await mkdir(logs);
         await Promise.all([
@@ -28,10 +29,10 @@ describe.skipIf(process.platform === "win32")(
           arguments: ["import-reference-source", root, "--json"],
           cwd: root,
           environment: {
-            HOME: root,
-            USERPROFILE: root,
-            XDG_CONFIG_HOME: root,
-            XDG_CACHE_HOME: root,
+            HOME: home,
+            USERPROFILE: home,
+            XDG_CONFIG_HOME: home,
+            XDG_CACHE_HOME: home,
             REA_REFERENCE_SECRET_PATTERNS_JSON: '["private.txt"]',
           },
         });

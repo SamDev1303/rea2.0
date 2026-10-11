@@ -1,16 +1,16 @@
 {
-  "name": "rea-agents",
-  "mcpName": "io.github.morluto/rea",
+  "name": "rea2-local",
+  "mcpName": "io.github.SamDev1303/rea2",
   "version": "6.4.0",
   "description": "Reverse engineer anything from your terminal or agent with one CLI and MCP server.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/morluto/rea.git"
+    "url": "git+https://github.com/SamDev1303/rea2.0.git"
   },
-  "homepage": "https://github.com/morluto/rea#readme",
+  "homepage": "https://github.com/SamDev1303/rea2.0#readme",
   "bugs": {
-    "url": "https://github.com/morluto/rea/issues"
+    "url": "https://github.com/SamDev1303/rea2.0/issues"
   },
   "keywords": [
     "reverse-engineering",
@@ -26,16 +26,12 @@
     "mcp",
     "hopper"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "type": "module",
   "imports": {
     "#javascript-analysis-worker": "./dist/composition/javascriptAnalysisWorkerProcess.js"
   },
   "bin": {
-    "rea": "scripts/rea.mjs",
-    "rea-agents": "scripts/rea.mjs"
+    "rea2": "scripts/rea.mjs"
   },
   "engines": {
     "node": "^22.19.0 || ^24.11.0 || >=26.0.0"
@@ -97,7 +93,7 @@
     "precheck": "npm run deps:check",
     "check": "node scripts/run-exclusive.mjs artifacts turbo run typecheck lint format:check knip metadata:check && npm run verify:architecture-guards",
     "precheck:fast": "npm run deps:check",
-    "check:fast": "turbo run typecheck lint --output-logs=errors-only",
+    "check:fast": "node scripts/run-exclusive.mjs artifacts turbo run typecheck lint --output-logs=errors-only",
     "precheck:changed": "npm run deps:check",
     "check:changed": "npm run check:fast && npm run test:changed",
     "precheck:test": "npm run deps:check",
@@ -192,6 +188,7 @@
     "verify:fixtures": "npm run build:fixtures && node scripts/verify-conformance-fixtures.mjs",
     "verify:readiness": "npm run build:cached && npm run verify:fixtures && node scripts/verify-reconstruction-readiness.mjs",
     "verify:package": "npm run build:cached && node scripts/verify-package.mjs",
+    "verify:local-setup": "node scripts/verify-local-setup.mjs",
     "verify:package:windows": "npm run build:cached && node scripts/verify-windows-package.mjs",
     "verify:qwen-client": "npm run build:cached && node scripts/verify-qwen-client.mjs",
     "verify:gemini-client": "npm run build:cached && node scripts/verify-gemini-client.mjs",
@@ -226,7 +223,7 @@
     "test:focused": "node scripts/run-development-tests.mjs focused",
     "build:windows-native": "node scripts/build-windows-native.mjs",
     "verify:windows-native:artifact": "node scripts/verify-windows-native-artifact.mjs",
-    "prepublishOnly": "npm run verify:windows-native:artifact",
+    "prepublishOnly": "node scripts/block-publication.mjs",
     "verify:windows-native": "node scripts/verify-windows-native.mjs",
     "verify:ghidra:windows:package": "node scripts/verify-packaged-ghidra-windows.mjs",
     "build:ghidra:nativeaot": "node scripts/build-ghidra-nativeaot.mjs",
@@ -323,5 +320,6 @@
     "typescript-termux": "npm:typescript@5.9.3",
     "vitepress": "1.6.4",
     "vitest": "5.0.3"
-  }
+  },
+  "private": true
 }

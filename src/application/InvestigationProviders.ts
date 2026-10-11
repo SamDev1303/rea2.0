@@ -79,6 +79,13 @@ export const JAVASCRIPT_APPLICATION_PROVIDER = {
   version: "1",
 } as const;
 
+/** Provider identity for protected, execution-free Swift source navigation. */
+export const SWIFT_SOURCE_PROVIDER = {
+  id: "rea-swift-source",
+  name: "REA inert Swift source mapper",
+  version: "1",
+} as const;
+
 /** Provider identity for static/passive-runtime JavaScript reconciliation. */
 export const JAVASCRIPT_RUNTIME_RECONCILIATION_PROVIDER = {
   id: "rea-javascript-runtime-reconciliation",

@@ -213,6 +213,14 @@ export const buildCapabilityInventory = (
 };
 
 const availabilityFor = (context: AvailabilityContext): Availability => {
+  if (context.name === "reconcile_investigation")
+    return { reason: "available", remediation: null };
+  if (context.name === "prepare_builder_handoff")
+    return {
+      reason: "provider_unavailable",
+      remediation:
+        "Trusted research-launch and exclusion-review authority is not configured for public JSON endpoints.",
+    };
   // These built-in workflows accept a caller-selected endpoint; they do not load the optional passive provider.
   if (
     context.name === "observe_web_execution" ||

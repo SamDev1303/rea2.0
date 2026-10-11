@@ -1,5 +1,7 @@
 /** Canonical names used by every one-shot CLI command registration. */
 export const CLI_COMMANDS = Object.freeze({
+  reconcileInvestigation: "reconcile-investigation",
+  prepareBuilderHandoff: "prepare-builder-handoff",
   inspectEvmInterface: "inspect-evm-interface",
   inspectWebNetworkCapture: "inspect-web-network-capture",
   observeWebExecution: "observe-web-execution",
@@ -117,6 +119,7 @@ export const CLI_COMMANDS = Object.freeze({
   listJavaScriptRuntimeTargets: "list-javascript-runtime-targets",
   observeJavaScriptRuntime: "observe-javascript-runtime",
   analyzeJavaScriptApplication: "analyze-javascript-application",
+  analyzeSwiftApplication: "analyze-swift-application",
   reconcileJavaScriptRuntime: "reconcile-javascript-runtime",
   traceApplicationFeature: "trace-application-feature",
   traceJavaScriptSemantics: "trace-javascript-semantics",

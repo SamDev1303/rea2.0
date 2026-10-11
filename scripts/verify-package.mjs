@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,13 @@ import {
 } from "./lib/mcp-startup-probe.mjs";
 
 const root = process.cwd();
+const deliveryMetadata = JSON.parse(
+  await readFile(join(root, "package.json"), "utf8"),
+);
+if (deliveryMetadata.private === true)
+  throw new Error(
+    "Historical npm distribution verification is unavailable for this private local delivery. It installs package runners and exercises registry publication/update paths. Run node scripts/verify-local-setup.mjs and the required local checks instead; no historical distribution stages ran.",
+  );
 const verifierRun = createVerifierRun();
 const workspace = await mkdtemp(join(tmpdir(), "rea-package-"));
 const evidenceRoot = join(workspace, "evidence");

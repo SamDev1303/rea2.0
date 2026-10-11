@@ -46,6 +46,7 @@ import {
   describeUnverifiedCause,
   type ProcessCaptureResourceCleanupOptions,
   ProcessCaptureResourceScope,
+  ProcessCaptureLifecycleCleanupFailure,
 } from "./ProcessCaptureLifecycle.js";
 import {
   assertNotCancelled,
@@ -266,6 +267,8 @@ const startCaptureRuntime = async (
     const selectedExecutable = await observeSelectedExecutable(
       scenario.executable,
       options.signal,
+      undefined,
+      options.resourceScope?.observationResources,
     );
     const startedAt = new Date();
     const started = Date.now();
@@ -460,6 +463,7 @@ const completeCapture = async (options: {
   >;
   readonly signal?: AbortSignal;
   readonly captureSnapshot: typeof snapshotRoots;
+  readonly resourceScope?: ProcessCaptureResourceScope;
   readonly eventJournal: readonly ProcessCaptureEventJournalEntry[];
   readonly observationBuffer: ProcessCaptureObservationBuffer;
   readonly recordEvent: RecordProcessCaptureEvent;
@@ -498,7 +502,11 @@ const completeCapture = async (options: {
   assertNotCancelled(options.signal);
   let after: Awaited<ReturnType<typeof snapshotRoots>>;
   try {
-    after = await options.captureSnapshot(scenario, options.signal);
+    after = await options.captureSnapshot(
+      scenario,
+      options.signal,
+      options.resourceScope?.observationResources,
+    );
   } catch (cause: unknown) {
     options.observationBuffer.filesystem_snapshots = {
       ...options.observationBuffer.filesystem_snapshots,
@@ -766,6 +774,7 @@ const runProcessScenario = async (
       observationBuffer: observations,
       recordEvent,
       captureSnapshot,
+      ...(resourceScope === undefined ? {} : { resourceScope }),
       ...(signal === undefined ? {} : { signal }),
       ...(progress === undefined ? {} : { onLiveProgress: reportSettling }),
     });
@@ -893,7 +902,30 @@ export const captureProcessScenario = async (
       );
     }
   }
-  const capture = await runResourceScope.run(execute);
-  await runResourceScope.close().catch(() => undefined);
+  let capture: Result<ProcessCapture, ProcessCaptureError | AnalysisError>;
+  try {
+    capture = await runResourceScope.run(execute);
+  } catch (cause: unknown) {
+    const failure = normalizeCaptureFailure(cause, signal);
+    capture = err(
+      failure instanceof ProcessCaptureError
+        ? failure
+        : new ProcessCaptureError("process capture lifecycle failed", {
+            cause,
+          }),
+    );
+  }
+  try {
+    await runResourceScope.close();
+  } catch (cleanupCause: unknown) {
+    return err(
+      new ProcessCaptureLifecycleCleanupFailure(
+        runResourceScope,
+        cleanupCause,
+        capture.ok ? undefined : capture.error,
+        capture.ok ? capture.value : undefined,
+      ),
+    );
+  }
   return capture;
 };

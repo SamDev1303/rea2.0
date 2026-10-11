@@ -1,4 +1,5 @@
-import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { describe, expect } from "vitest";
@@ -14,8 +15,13 @@ import {
 } from "../../../src/artifacts/apple/MachoImage.fixture.js";
 import { dylibResolutionResultSchema } from "../../../src/domain/apple/dylibResolution.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
+import { AppleStaticArtifactProvider } from "../../../src/artifacts/AppleStaticArtifactProvider.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
+import type { JsonValue } from "../../../src/domain/jsonValue.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest, type TestCli } from "../../support/cli/cliFixture.js";
+import type { TestProcesses } from "../../support/process/processFixture.js";
+import { runOwnedDylibResolutionCli } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const ENVIRONMENT = { REA_LOG_LEVEL: "silent", REA_ANALYSIS_PROVIDER: "auto" };
 
@@ -31,7 +37,7 @@ const writeFiles = async (
 
 /** A caller-selected root that cannot be traced is an input issue on that root. */
 const expectRootInputError = async (
-  cli: TestCli,
+  processes: TestProcesses,
   {
     app,
     root,
@@ -44,9 +50,9 @@ const expectRootInputError = async (
     readonly message: string;
   },
 ): Promise<void> => {
-  const rejected = await cli.run({
-    arguments: ["trace-dylib-resolution", app, "--root", root, "--json"],
-    environment: ENVIRONMENT,
+  const rejected = await runOwnedDylibResolutionCli(processes, {
+    ...appInventory(app),
+    selectedRoots: [root],
   });
   expect(rejected.exitCode).toBe(1);
   expect(rejected.json).toMatchObject({
@@ -62,6 +68,72 @@ const expectRootInputError = async (
       ],
     },
   });
+};
+
+/** Static parser coverage for synthetic carriers that the controller must reject. */
+const traceSyntheticDylib = async (
+  path: string,
+  parameters: Readonly<Record<string, JsonValue>>,
+  app?: string,
+) => {
+  const bytes = await readFile(path);
+  const client = new AppleStaticArtifactProvider().createClient({
+    path,
+    ...(app === undefined
+      ? {}
+      : { sourcePath: app, bundleInfoPlist: join(app, "Contents/Info.plist") }),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    kind: "executable",
+    format: "mach-o",
+    architecture: "arm64",
+    availableArchitectures: ["arm64"],
+  });
+  try {
+    const result = await client.execute("trace_dylib_resolution", parameters);
+    if (result.ok) throw new Error("Expected the synthetic parser to reject");
+    return projectAnalysisError(result.error);
+  } finally {
+    expect(await client.close()).toEqual({ ok: true, value: null });
+  }
+};
+
+const expectSyntheticSymlinkEscape = async (cli: TestCli, app: string) => {
+  // A symlink carrier cannot enter a complete single-link inventory.
+  const outside = await createTestTempDirectory("rea-dylib-outside-");
+  await writeFiles(outside, { Tool: machoImage({}) });
+  await symlink(outside, join(app, "Contents/Linked"));
+  expect(
+    await traceSyntheticDylib(
+      join(app, "Contents/MacOS/App"),
+      { roots: ["Contents/Linked/Tool"] },
+      app,
+    ),
+  ).toMatchObject({
+    code: "invalid_request",
+    details: {
+      issues: [
+        {
+          path: ["roots", 0],
+          reason: "invalid_value",
+          message: expect.stringContaining(
+            "resolves outside the analyzed root",
+          ),
+        },
+      ],
+    },
+  });
+  const denied = await cli.run({
+    arguments: [
+      "trace-dylib-resolution",
+      app,
+      "--root",
+      "Contents/Linked/Tool",
+      "--json",
+    ],
+    environment: ENVIRONMENT,
+  });
+  expect(denied.exitCode).toBe(1);
+  expect(denied.json).toMatchObject({ code: "capability_unavailable" });
 };
 
 const fixtureApp = async (): Promise<string> => {
@@ -97,6 +169,27 @@ const fixtureApp = async (): Promise<string> => {
   return app;
 };
 
+const appInventory = (
+  app: string,
+  additionalFiles: readonly string[] = [],
+) => ({
+  root: app,
+  path: app,
+  directories: [
+    "Contents",
+    "Contents/MacOS",
+    "Contents/Frameworks",
+    "Contents/Helpers",
+  ],
+  files: [
+    "Contents/Info.plist",
+    "Contents/MacOS/App",
+    "Contents/Frameworks/libcore.dylib",
+    "Contents/Helpers/tool",
+    ...additionalFiles,
+  ],
+});
+
 const withBrokenHelper = async (app: string): Promise<void> => {
   const broken = machoImage({ commands: [rpathCommand("x")] });
   // cmdsize 0 makes the command table unreadable.
@@ -105,97 +198,85 @@ const withBrokenHelper = async (app: string): Promise<void> => {
 };
 
 describe("trace-dylib-resolution CLI", () => {
-  cliTest("traces every executable root of an app bundle", async ({ cli }) => {
-    const app = await fixtureApp();
-    const result = await cli.run({
-      arguments: ["trace-dylib-resolution", app, "--json"],
-      environment: ENVIRONMENT,
-    });
-    expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
-    const trace = dylibResolutionResultSchema.parse(
-      (result.json as { normalized_result: unknown }).normalized_result,
-    );
-    expect(trace.root_path).toBe(app);
-    expect(trace.roots.map(({ image }) => image)).toEqual([
-      "Contents/Helpers/tool",
-      "Contents/MacOS/App",
-    ]);
-    // The normalized result is the provider's only representation; Evidence
-    // must not carry it a second time as raw_result.
-    expect(result.json).toMatchObject({ raw_result: null });
-    expect(
-      trace.edges.map(({ loader, install_name: name, resolution }) => [
-        loader,
-        name,
-        resolution.status,
-        resolution.image,
-      ]),
-    ).toEqual([
-      [
+  cliTest(
+    "traces every executable root of an app bundle",
+    async ({ processes }) => {
+      const app = await fixtureApp();
+      const result = await runOwnedDylibResolutionCli(
+        processes,
+        appInventory(app),
+      );
+      expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
+      const trace = dylibResolutionResultSchema.parse(
+        (result.json as { normalized_result: unknown }).normalized_result,
+      );
+      expect(trace.root_path).toBe(app);
+      expect(trace.roots.map(({ image }) => image)).toEqual([
         "Contents/Helpers/tool",
-        "@loader_path/libnone.dylib",
-        "unresolved",
-        null,
-      ],
-      [
         "Contents/MacOS/App",
-        "@rpath/libcore.dylib",
-        "resolved",
-        "Contents/Frameworks/libcore.dylib",
-      ],
-      ["Contents/MacOS/App", "@rpath/libgone.dylib", "unresolved", null],
-    ]);
-    expect(trace.findings.map(({ kind }) => kind)).toEqual([
-      "required-load-unresolved",
-      "weak-load-unresolved",
-    ]);
-    expect(
-      trace.images.every(({ sha256 }) => /^[0-9a-f]{64}$/u.test(sha256)),
-    ).toBe(true);
-  });
+      ]);
+      // The normalized result is the provider's only representation; Evidence
+      // must not carry it a second time as raw_result.
+      expect(result.json).toMatchObject({ raw_result: null });
+      expect(
+        trace.edges.map(({ loader, install_name: name, resolution }) => [
+          loader,
+          name,
+          resolution.status,
+          resolution.image,
+        ]),
+      ).toEqual([
+        [
+          "Contents/Helpers/tool",
+          "@loader_path/libnone.dylib",
+          "unresolved",
+          null,
+        ],
+        [
+          "Contents/MacOS/App",
+          "@rpath/libcore.dylib",
+          "resolved",
+          "Contents/Frameworks/libcore.dylib",
+        ],
+        ["Contents/MacOS/App", "@rpath/libgone.dylib", "unresolved", null],
+      ]);
+      expect(trace.findings.map(({ kind }) => kind)).toEqual([
+        "required-load-unresolved",
+        "weak-load-unresolved",
+      ]);
+      expect(
+        trace.images.every(({ sha256 }) => /^[0-9a-f]{64}$/u.test(sha256)),
+      ).toBe(true);
+    },
+  );
 
   cliTest(
     "narrows roots and architecture, and rejects escaping roots",
-    async ({ cli }) => {
+    async ({ cli, processes }) => {
       const app = await fixtureApp();
-      const narrowed = await cli.run({
-        arguments: [
-          "trace-dylib-resolution",
-          app,
-          "--root",
-          "Contents/MacOS/App",
-          "--architecture",
-          "arm64",
-          "--json",
-        ],
-        environment: ENVIRONMENT,
+      const narrowed = await runOwnedDylibResolutionCli(processes, {
+        ...appInventory(app),
+        selectedRoots: ["Contents/MacOS/App"],
+        architecture: "arm64",
       });
       expect(narrowed.exitCode).toBe(0);
       expect(
         (narrowed.json as { normalized_result: { roots: unknown } })
           .normalized_result.roots,
       ).toEqual([{ image: "Contents/MacOS/App", architecture: "arm64" }]);
-      // A root below a symlinked directory that points outside the bundle.
-      const outside = await createTestTempDirectory("rea-dylib-outside-");
-      await writeFiles(outside, { Tool: machoImage({}) });
-      await symlink(outside, join(app, "Contents/Linked"));
       for (const [root, reason, message] of [
         ["../outside", "invalid_format", "Use a normalized path"],
         ["Contents/Info.plist", "invalid_value", "is not a Mach-O image"],
-        [
-          "Contents/Linked/Tool",
-          "invalid_value",
-          "resolves outside the analyzed root",
-        ],
       ] as const) {
-        await expectRootInputError(cli, { app, root, reason, message });
+        await expectRootInputError(processes, { app, root, reason, message });
       }
+      await expectSyntheticSymlinkEscape(cli, app);
     },
   );
 
   cliTest(
     "resolves a standalone Mach-O against its own directory",
-    async ({ cli }) => {
+    async ({ processes }) => {
       const directory = await createTestTempDirectory("rea-dylib-standalone-");
       await writeFiles(directory, {
         tool: machoImage({
@@ -211,13 +292,11 @@ describe("trace-dylib-resolution CLI", () => {
         }),
         "unrelated.txt": "not traversed",
       });
-      const result = await cli.run({
-        arguments: [
-          "trace-dylib-resolution",
-          join(directory, "tool"),
-          "--json",
-        ],
-        environment: ENVIRONMENT,
+      const result = await runOwnedDylibResolutionCli(processes, {
+        root: directory,
+        path: join(directory, "tool"),
+        directories: ["lib"],
+        files: ["tool", "lib/libhelper.dylib", "unrelated.txt"],
       });
       expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
       const trace = dylibResolutionResultSchema.parse(
@@ -233,13 +312,13 @@ describe("trace-dylib-resolution CLI", () => {
 
   cliTest(
     "reports unparsed Mach-O files found while enumerating roots",
-    async ({ cli }) => {
+    async ({ processes }) => {
       const app = await fixtureApp();
       await withBrokenHelper(app);
-      const result = await cli.run({
-        arguments: ["trace-dylib-resolution", app, "--json"],
-        environment: ENVIRONMENT,
-      });
+      const result = await runOwnedDylibResolutionCli(
+        processes,
+        appInventory(app, ["Contents/Helpers/broken"]),
+      );
       expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
       const trace = dylibResolutionResultSchema.parse(
         (result.json as { normalized_result: unknown }).normalized_result,
@@ -254,7 +333,7 @@ describe("trace-dylib-resolution CLI", () => {
 
 cliTest(
   "retains directory requirements when resolving dylib install names",
-  async ({ cli }) => {
+  async ({ processes }) => {
     const directory = await createTestTempDirectory("rea-dylib-path-cli-");
     const names = [
       "@loader_path/lib/libhelper.dylib/",
@@ -279,9 +358,11 @@ cliTest(
         commands: [buildVersionCommand(1)],
       }),
     });
-    const result = await cli.run({
-      arguments: ["trace-dylib-resolution", join(directory, "tool"), "--json"],
-      environment: ENVIRONMENT,
+    const result = await runOwnedDylibResolutionCli(processes, {
+      root: directory,
+      path: join(directory, "tool"),
+      directories: ["lib"],
+      files: ["tool", "lib/libhelper.dylib"],
     });
     expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
     const trace = dylibResolutionResultSchema.parse(
@@ -337,7 +418,10 @@ describe.skipIf(process.getuid?.() === 0)(
             environment: ENVIRONMENT,
           });
           expect(result.exitCode).toBe(1);
-          expect(result.json).toMatchObject({
+          expect(result.json).toMatchObject({ code: "capability_unavailable" });
+          expect(
+            await traceSyntheticDylib(join(directory, "tool"), {}),
+          ).toMatchObject({
             details: {
               reason: "unavailable",
               detail: expect.stringContaining(
@@ -355,7 +439,7 @@ describe.skipIf(process.getuid?.() === 0)(
 
 cliTest(
   "reports embedded path overrides as conditional without changing diagnostic-only resolution",
-  async ({ cli }) => {
+  async ({ processes }) => {
     for (const [setting, expected] of [
       ["DYLD_LIBRARY_PATH=/external", "conditional"],
       ["DYLD_PRINT_LIBRARIES=1", "resolved"],
@@ -376,15 +460,9 @@ cliTest(
           ],
         }),
       });
-      const result = await cli.run({
-        arguments: [
-          "trace-dylib-resolution",
-          app,
-          "--root",
-          "Contents/MacOS/App",
-          "--json",
-        ],
-        environment: ENVIRONMENT,
+      const result = await runOwnedDylibResolutionCli(processes, {
+        ...appInventory(app),
+        selectedRoots: ["Contents/MacOS/App"],
       });
       expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
       const trace = dylibResolutionResultSchema.parse(
@@ -408,7 +486,7 @@ cliTest(
 
 cliTest(
   "retains definitive load findings for an explicitly selected app library root",
-  async ({ cli }) => {
+  async ({ processes }) => {
     const app = await fixtureApp();
     const settings = [
       "DYLD_LIBRARY_PATH=/external",
@@ -429,15 +507,9 @@ cliTest(
         commands: [buildVersionCommand(1)],
       }),
     });
-    const result = await cli.run({
-      arguments: [
-        "trace-dylib-resolution",
-        app,
-        "--root",
-        "Contents/Frameworks/libcore.dylib",
-        "--json",
-      ],
-      environment: ENVIRONMENT,
+    const result = await runOwnedDylibResolutionCli(processes, {
+      ...appInventory(app, ["Contents/Frameworks/child.dylib"]),
+      selectedRoots: ["Contents/Frameworks/libcore.dylib"],
     });
     expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
     const trace = dylibResolutionResultSchema.parse(
@@ -465,7 +537,7 @@ cliTest(
 
 cliTest(
   "distinguishes empty search directories from empty versioned or suffix lists",
-  async ({ cli }) => {
+  async ({ processes }) => {
     for (const [setting, status] of [
       ["DYLD_FALLBACK_LIBRARY_PATH=", "undetermined"],
       ["DYLD_VERSIONED_LIBRARY_PATH=", "unresolved"],
@@ -483,9 +555,11 @@ cliTest(
           ],
         }),
       );
-      const result = await cli.run({
-        arguments: ["trace-dylib-resolution", path, "--json"],
-        environment: ENVIRONMENT,
+      const result = await runOwnedDylibResolutionCli(processes, {
+        root,
+        path,
+        directories: [],
+        files: ["program"],
       });
       expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
       const trace = dylibResolutionResultSchema.parse(

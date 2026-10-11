@@ -9,6 +9,10 @@ import { SESSION_TOOL_CONTRACTS } from "../../../src/contracts/sessionToolContra
 import { TOOL_CONTRACTS } from "../../../src/contracts/toolContracts.js";
 import type {} from "../../../src/domain/jsonValue.js";
 import { createServer } from "../../../src/server/createServer.js";
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 import { observed as ok } from "../../fixtures/analysisExecution.js";
 import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
 import { ok as resultOk } from "../../../src/domain/result.js";
@@ -202,8 +206,12 @@ afterEach(async () => {
   );
 });
 
-const connect = async (analysis: AnalysisOperationPort = fixturePort()) => {
+const connect = async (
+  requests: readonly OwnedMcpFixtureRequest[],
+  analysis: AnalysisOperationPort = fixturePort(),
+) => {
   const server = createServer({ kind: "fixed", analysis });
+  await attachNonexecutingMcpFixture(server, analysis, requests);
   const client = new Client({ name: "enhanced-test", version: "1.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -216,7 +224,7 @@ const connect = async (analysis: AnalysisOperationPort = fixturePort()) => {
 // oxlint-disable-next-line max-lines-per-function -- keep the complete production registration checks together.
 describe("enhanced MCP tools", () => {
   it("lists the complete target-open analysis surface", async () => {
-    const client = await connect();
+    const client = await connect([]);
     const listed = await client.listTools();
     expect(listed.tools).toHaveLength(
       TOOL_CONTRACTS.length -
@@ -236,7 +244,6 @@ describe("enhanced MCP tools", () => {
 
   // oxlint-disable-next-line max-lines-per-function -- one exhaustive registration test guards the public tool catalog.
   it("executes all enhanced tools through production registration", async () => {
-    const client = await connect();
     const calls = [
       ["get_objc_classes", { pattern: "Fixture" }],
       ["get_objc_protocols", {}],
@@ -253,6 +260,9 @@ describe("enhanced MCP tools", () => {
       ["inspect_native_dispatch_metadata", { max_records: 100 }],
       ["trace_native_values", { procedure: "0x1" }],
     ] as const;
+    const client = await connect(
+      calls.map(([name, arguments_]) => ({ name, arguments: arguments_ })),
+    );
     const results = await Promise.all(
       calls.map(async ([name, arguments_]) =>
         jsonResult(await client.callTool({ name, arguments: arguments_ })),

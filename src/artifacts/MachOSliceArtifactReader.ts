@@ -378,7 +378,8 @@ const lipoMatchesSlice = (
     reported.cpu_subtype_code !== null;
   return (
     (hasPhysicalIdentity || structurallyUnique) &&
-    lipoNameMatches(reported.name, observed.architecture) &&
+    (lipoNameMatches(reported.name, observed.architecture) ||
+      numericalLipoNameMatches(reported)) &&
     (reported.file_offset === null ||
       reported.file_offset === observed.slice_offset) &&
     (reported.size === null || reported.size === observed.slice_size) &&
@@ -400,3 +401,16 @@ const lipoMatchesSlice = (
 const lipoNameMatches = (reported: string, observed: string): boolean =>
   reported === observed ||
   (observed === "arm64e" && /^arm64e\.[A-Za-z0-9_]+$/u.test(reported));
+
+/** lipo prints unrecognised CPU variants numerically; retain exact physical matching. */
+const numericalLipoNameMatches = (reported: LipoArchitecture): boolean => {
+  const parts = /^\(cputype \((\d+)\) cpusubtype \((\d+)\)\)$/u.exec(
+    reported.name,
+  );
+  return (
+    parts !== null &&
+    reported.cpu_type_code === Number(parts[1]) &&
+    reported.cpu_subtype_code !== null &&
+    (reported.cpu_subtype_code & 0xffffff) === Number(parts[2])
+  );
+};

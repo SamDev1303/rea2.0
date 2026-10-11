@@ -1,8 +1,20 @@
 import { fileURLToPath } from "node:url";
 
-import { Client } from "@modelcontextprotocol/client";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
+import { Writable } from "node:stream";
+import pino from "pino";
+import { cliTest as it } from "../../support/cli/cliFixture.js";
+import type { TestProcesses } from "../../support/process/processFixture.js";
+import { createServer } from "../../../src/server/createServer.js";
+import {
+  createAnalysisExecution,
+  type AnalysisOperationPort,
+} from "../../../src/application/AnalysisProvider.js";
+import { NoBinaryOpenError } from "../../../src/domain/configurationErrors.js";
+import { ok, err } from "../../../src/domain/result.js";
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 import { z } from "zod";
 
 import { CATALOG_IDENTITY } from "../../../src/catalogIdentity.js";
@@ -102,12 +114,98 @@ const callCurrentDocument = async (target?: {
   return { result, stderr, records: completeStderrRecords(stderr) };
 };
 
+const callOwnedCurrentDocument = async (selected: boolean) => {
+  let stderr = "";
+  const destination = new Writable({
+    write(chunk, _encoding, callback) {
+      stderr += chunk.toString();
+      callback();
+    },
+  });
+  const logger = pino(
+    { base: { application: "rea", mode: "mcp" } },
+    destination,
+  );
+  let calls = 0;
+  const analysis: AnalysisOperationPort = {
+    execute: async (operation, parameters) => {
+      if (
+        operation !== "current_document" ||
+        Object.keys(parameters).length !== 0
+      )
+        throw new Error("Outside fixed owned document recording");
+      calls++;
+      return selected
+        ? ok(
+            createAnalysisExecution("fixture", {
+              id: "hopper",
+              name: "Owned Hopper recording",
+              version: "fixture",
+            }),
+          )
+        : err(new NoBinaryOpenError());
+    },
+  };
+  const server = createServer(
+    { kind: "fixed", analysis },
+    { logger, environment: {} },
+  );
+  await attachNonexecutingMcpFixture(server, analysis, [
+    { name: "current_document", arguments: {} },
+  ]);
+  const client = new Client({ name: "owned-document-recording", version: "1" });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({
+      name: "current_document",
+      arguments: {},
+    });
+    expect(calls).toBe(1);
+    return { result, stderr, records: completeStderrRecords(stderr) };
+  } finally {
+    await client.close();
+    await server.close();
+  }
+};
+
+const assertProductionStartupRefusal = async (
+  processes: TestProcesses,
+  target: { path: string; kind?: "database" },
+) => {
+  const actual = await processes.run(process.execPath, [mainPath], {
+    cwd: process.cwd(),
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOPPER_LAUNCHER_PATH: process.execPath,
+      HOPPER_TARGET_PATH: target.path,
+      ...(target.kind === undefined ? {} : { HOPPER_TARGET_KIND: target.kind }),
+      HOPPER_LOADER_ARGS_JSON: JSON.stringify([fixturePath]),
+    },
+    timeoutMs: 15000,
+  });
+  expect(actual.exitCode).toBe(1);
+  expect(actual.stdout).toBe("");
+  expect(actual.stderr).toContain(
+    "Host target execution and unfamiliar native parsing are blocked",
+  );
+  expect(actual.stderr).not.toContain("HOPPER_LOADER_ARGS_JSON");
+  expect(actual.stderr).not.toContain(fixturePath);
+};
+
 describe("production stdio runtime", () => {
   // The `test:acceptance` lane runs the real entrypoint on the current host;
   // these cases state each supported host's result in the test name and body.
 
   it("reports a missing target through MCP and structured logs", async () => {
-    const { result, stderr, records } = await callCurrentDocument();
+    const actual = await callCurrentDocument();
+    expect(actual.result.isError).toBe(true);
+    expect(JSON.stringify(actual.result)).toContain("capability_unavailable");
+    expect(actual.stderr).not.toContain("HOPPER_LOADER_ARGS_JSON");
+    expect(actual.stderr).not.toContain(fixturePath);
+    const { result, stderr, records } = await callOwnedCurrentDocument(false);
     expect(result.isError).toBe(true);
     expect(result.content).toEqual(
       expect.arrayContaining([
@@ -131,11 +229,12 @@ describe("production stdio runtime", () => {
   }, 15_000);
 
   it.runIf(process.platform === "darwin")(
-    "returns the selected document on macOS through MCP and structured logs",
-    async () => {
-      const { result, stderr, records } = await callCurrentDocument({
+    "retains selected-document MCP recording semantics and production startup refusal on macOS",
+    async ({ processes }) => {
+      await assertProductionStartupRefusal(processes, {
         path: process.execPath,
       });
+      const { result, stderr, records } = await callOwnedCurrentDocument(true);
       expect(result.isError).not.toBe(true);
       const observation = evidenceResultOf(z.literal("fixture")).parse(
         result.structuredContent,
@@ -224,12 +323,13 @@ describe("production stdio runtime", () => {
   }, 30_000);
 
   it.runIf(process.platform === "darwin")(
-    "serves a database-kind initial target without a fatal record on macOS",
-    async () => {
-      const { result, records } = await callCurrentDocument({
+    "retains database-kind document recording while production initial targets are refused on macOS",
+    async ({ processes }) => {
+      await assertProductionStartupRefusal(processes, {
         path: fileURLToPath(import.meta.url),
         kind: "database",
       });
+      const { result, records } = await callOwnedCurrentDocument(true);
       expect(result.isError).not.toBe(true);
       evidenceResultOf(z.literal("fixture")).parse(result.structuredContent);
       expect(records).toContainEqual(

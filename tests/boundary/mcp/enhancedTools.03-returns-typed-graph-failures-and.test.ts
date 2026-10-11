@@ -61,16 +61,19 @@ describe("enhanced MCP tools", () => {
   });
 
   it("uses every procedure in one complete inventory", async () => {
-    const client = await connect({
-      execute: () => {
-        return Promise.resolve(
-          ok([
-            { address: "0x1", value: "_TtC5First" },
-            { address: "0x2", value: "_TtC4Last" },
-          ]),
-        );
+    const client = await connect(
+      {
+        execute: () => {
+          return Promise.resolve(
+            ok([
+              { address: "0x1", value: "_TtC5First" },
+              { address: "0x2", value: "_TtC4Last" },
+            ]),
+          );
+        },
       },
-    });
+      [{ name: "analyze_swift_types", arguments: {} }],
+    );
     const result = jsonResult(
       await client.callTool({ name: "analyze_swift_types", arguments: {} }),
     );

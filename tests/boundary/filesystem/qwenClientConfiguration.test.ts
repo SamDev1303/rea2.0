@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,6 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { readClientRegistrationStatuses } from "../../../src/application/ClientRegistrationStatus.js";
 import { configureClientConfiguration } from "../../../src/application/SetupClientConfiguration.js";
 import { systemSetupHost } from "../../../src/application/SetupHost.js";
-import { MANAGED_SKILL_FILES } from "../../../src/application/SetupSkill.js";
 import { supportedClients } from "../../../src/application/SupportedClients.js";
 import { systemUninstallHost } from "../../../src/application/Uninstall.js";
 import { PRODUCT_IDENTITY } from "../../../src/identity.js";
@@ -98,7 +97,7 @@ describe("Qwen Code client lifecycle", () => {
       model: { name: "qwen3-coder-plus" },
       mcpServers: {
         other: { command: "other-server" },
-        rea: { command: "npx", args: command.slice(1) },
+        rea2: { command: command[0], args: command.slice(1) },
       },
     });
     expect(await configureClientConfiguration(client, {}, command)).toEqual({
@@ -116,7 +115,7 @@ describe("Qwen Code client lifecycle", () => {
     expect(removedText).toContain("// Keep this note.");
   });
 
-  it("reports a package-runner registration as aligned", async () => {
+  it("reports the local checkout registration as aligned", async () => {
     const { home, client } = await qwenClient();
     expect(
       (await configureClientConfiguration(client, {}, command)).status,
@@ -131,7 +130,7 @@ describe("Qwen Code client lifecycle", () => {
 
 describe("Qwen Code profile setup", () => {
   it.each([false, true])(
-    "installs and removes the shared skill with a custom home: %s",
+    "preserves externally managed shared skills with a custom home: %s",
     async (customHome) => {
       const home = await createTestTempDirectory("rea-qwen-profile-");
       const profile = join(home, customHome ? "qwen-profile" : ".qwen");
@@ -150,15 +149,23 @@ describe("Qwen Code profile setup", () => {
       expect(await setup.configureClient(client, {}, command)).toEqual({
         status: "configured",
       });
-      expect(await setup.installSkill([client.name])).toBe("installed");
+      expect(await setup.installSkill([client.name])).toBe("failed");
+      const skillRoot = join(home, "Sync", "skills", "rea2");
+      await mkdir(skillRoot, { recursive: true });
+      await writeFile(
+        join(skillRoot, "SKILL.md"),
+        '---\nname: rea2\nmetadata:\n  version: "1.0.0"\n---\n',
+      );
+      await mkdir(join(home, ".agents", "skills"), { recursive: true });
+      await symlink(skillRoot, join(home, ".agents", "skills", "rea2"), "dir");
       const skill = join(home, ".agents", "skills", PRODUCT_IDENTITY.skillName);
       await writeFile(join(skill, "user-notes.txt"), "user-authored");
       expect(await readFile(join(skill, "SKILL.md"), "utf8")).toContain(
-        "reverse-engineer-anything",
+        "name: rea2",
       );
       expect(await setup.clientNeedsConfigure(client, {}, command)).toBe(false);
       expect(await setup.skillNeedsInstall([client.name])).toBe(false);
-      expect(await setup.installSkill([client.name])).toBe("unchanged");
+      expect(await setup.installSkill([client.name])).toBe("failed");
       expect(
         (
           await readClientRegistrationStatuses(
@@ -174,11 +181,8 @@ describe("Qwen Code profile setup", () => {
       );
       expect(registered).toEqual(client);
       expect((await uninstall.removeClient(client)).status).toBe("removed");
-      expect((await uninstall.removeSkill()).status).toBe("removed");
-      for (const relativePath of MANAGED_SKILL_FILES)
-        await expect(access(join(skill, relativePath))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+      expect((await uninstall.removeSkill()).status).toBe("skipped");
+      await expect(access(join(skill, "SKILL.md"))).resolves.toBeUndefined();
       expect(await readFile(join(skill, "user-notes.txt"), "utf8")).toBe(
         "user-authored",
       );

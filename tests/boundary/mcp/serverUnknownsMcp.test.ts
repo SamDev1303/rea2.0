@@ -1,3 +1,8 @@
+import { machoImage } from "../../../src/artifacts/apple/MachoImage.fixture.js";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import type { CallToolResult } from "@modelcontextprotocol/server";
@@ -30,6 +35,7 @@ afterEach(async () => {
 
 const providerWithCapabilities = (
   operations: readonly CapabilityDescriptor["operation"][],
+  calls: string[] = [],
 ): AnalysisProvider => {
   const identity = { id: "fixture", name: "Fixture", version: "1" };
   const capabilities: readonly CapabilityDescriptor[] = operations.map(
@@ -62,6 +68,8 @@ const providerWithCapabilities = (
     capabilities: () => capabilities,
     createClient: () => ({
       execute: (operation) => {
+        calls.push(operation);
+        if (operation === "health") return Promise.resolve(ok(null));
         return Promise.resolve(
           err(
             new AnalysisCapabilityUnavailableError(
@@ -88,20 +96,35 @@ const structured = (result: CallToolResult): Record<string, unknown> => {
 };
 
 it("does not record capability unavailability without supporting Evidence", async () => {
+  const calls: string[] = [];
   const session = createTestBinarySession(
-    providerWithCapabilities(["procedure_pseudo_code"]),
+    providerWithCapabilities(["procedure_pseudo_code"], calls),
   );
   const server = createServer({ kind: "session", session });
+  const target = join(
+    await createTestTempDirectory("rea-unknown-owned-"),
+    "owned-program",
+  );
+  await writeFile(target, machoImage({}));
+  await attachNonexecutingMcpFixture(server, session, [
+    { name: "procedure_pseudo_code", arguments: { procedure: "main" } },
+  ]);
   const client = new Client({ name: "unavailable-unknown", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   resources.push(client, server);
   await server.connect(serverTransport);
   await client.connect(clientTransport);
-  await client.callTool({
-    name: "open_binary",
-    arguments: { path: process.execPath },
-  });
+  expect(
+    (
+      await client.callTool({
+        name: "open_binary",
+        arguments: { path: target },
+      })
+    ).isError,
+  ).toBe(true);
+  expect(session.activeTarget()).toBeUndefined();
+  expect((await session.open(target)).ok).toBe(true);
 
   const unavailable = await client.callTool({
     name: "procedure_pseudo_code",
@@ -112,9 +135,16 @@ it("does not record capability unavailability without supporting Evidence", asyn
   expect(unavailable.isError).toBe(true);
   expect(structured(unavailable)).toMatchObject({
     error: {
-      category: "unavailable",
+      code: "capability_unavailable",
+      category: "unsupported_provider",
+      details: {
+        provider_id: "fixture",
+        operation: "procedure_pseudo_code",
+        reason: "Decompiler is not installed.",
+      },
     },
   });
+  expect(calls).toEqual(["health", "procedure_pseudo_code"]);
   expect(
     structured(await client.callTool({ name: "list_unknowns", arguments: {} })),
   ).toMatchObject({

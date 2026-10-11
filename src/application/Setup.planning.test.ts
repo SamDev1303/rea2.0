@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { runSetup } from "./Setup.js";
+import { localRegistrationCommand } from "./ClientRegistrationIdentity.js";
 import type { SetupProgressEvent } from "./SetupTypes.js";
 import { FakeSetupHost, options } from "./Setup.fixture.js";
 
@@ -73,7 +74,7 @@ describe("setup workflow", () => {
       supported: true,
     };
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () => Promise.resolve(true),
     );
@@ -89,7 +90,7 @@ describe("setup workflow", () => {
   it("requires first-run activation after installing Hopper on macOS", async () => {
     const host = new FakeSetupHost();
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () => Promise.resolve(true),
     );
@@ -100,7 +101,7 @@ describe("setup workflow", () => {
   it("declines an interactive plan without mutation", async () => {
     const host = new FakeSetupHost();
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () => Promise.resolve(false),
     );
@@ -115,7 +116,7 @@ describe("setup workflow", () => {
     host.clients = [{ name: "codex", configPath: "/codex.toml" }];
 
     const result = await runSetup(
-      { ...options(false), structured: false },
+      { ...options(false), structured: false, proposeHopper: true },
       host,
       () => Promise.resolve({ approved: false, selectedActionIds: [] }),
     );
@@ -200,7 +201,10 @@ describe("setup workflow lifecycle and provider planning", () => {
       {
         client: "codex",
         config_path: "/codex.toml",
-        command: ["rea", "mcp"],
+        command: [
+          localRegistrationCommand()[0]!,
+          ...localRegistrationCommand().slice(1),
+        ],
         state: "aligned",
         remediation: null,
       },

@@ -1,3 +1,7 @@
+import {
+  canonicalAdmissionPath,
+  isProtectedHostPath,
+} from "../filesystem/ProtectedPaths.js";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -53,6 +57,16 @@ const resolveRoot = async (
   if (isAborted(signal))
     return err(failure("cancelled", "Reference source import cancelled"));
   try {
+    if (
+      isProtectedHostPath(requestedRoot) ||
+      isProtectedHostPath(await canonicalAdmissionPath(requestedRoot))
+    )
+      return err(
+        failure(
+          "invalid-root",
+          "Protected source root is outside investigation scope",
+        ),
+      );
     const metadata = await stat(requestedRoot);
     if (isAborted(signal))
       return err(failure("cancelled", "Reference source import cancelled"));
@@ -106,7 +120,12 @@ const buildIgnored = async (
   if (present) {
     let text: string;
     try {
-      text = await readRegularFileText(policyPath, { signal });
+      text = await readRegularFileText(policyPath, {
+        signal,
+        symlinks: "reject",
+        hardlinks: "reject",
+        maxBytes: 1024 * 1024,
+      });
     } catch (cause: unknown) {
       if (!(cause instanceof RegularFileCleanupFailure)) throw cause;
       const retry = await retryRegularFileCleanup(cause, resources);

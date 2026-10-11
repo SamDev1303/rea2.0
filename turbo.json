@@ -53,7 +53,8 @@
         "src/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
         "tests/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}",
         "vitest.config.ts"
-      ]
+      ],
+      "dependsOn": ["compile"]
     },
     "format:check": {},
     "knip": {

@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/client";
 import {
   StdioClientTransport,
@@ -17,7 +16,7 @@ import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 const configurationSchema = z.object({
   mcpServers: z.object({
-    rea: z.object({ command: z.string(), args: z.array(z.string()) }),
+    rea2: z.object({ command: z.string(), args: z.array(z.string()) }),
   }),
 });
 
@@ -40,7 +39,7 @@ it.each([
       theme: "dark",
       mcpServers: {
         other: { command: "another-server" },
-        rea: {
+        rea2: {
           command: previousCommand[0],
           args: previousCommand.slice(1),
         },
@@ -88,7 +87,7 @@ it("keeps the Windows launcher aligned through Codex TOML setup and removal", as
   await mkdir(join(home, ".codex"));
   const configPath = join(home, ".codex", "config.toml");
   const original =
-    '\uFEFF# Keep this explanation.\nnotify = ["a", "b"]\nliteral = \'C:\\demo\\path\'\ndisabled_mcp_servers = ["rea"]\n\n[mcp_servers.other]\ncommand = "another-server"\n';
+    '\uFEFF# Keep this explanation.\nnotify = ["a", "b"]\nliteral = \'C:\\demo\\path\'\ndisabled_mcp_servers = ["rea2"]\n\n[mcp_servers.other]\ncommand = "another-server"\n';
   await writeFile(configPath, original);
   const client = { name: "codex", configPath, format: "toml" } as const;
   const command = setupRegistrationCommand("win32", true);
@@ -126,7 +125,7 @@ it("retains rea-named custom shell registrations without writing a backup", asyn
     ["cmd.exe", "/c", "npx", "-y", "rea-agents@5.0.0 & other", "mcp"],
   ]) {
     const original = JSON.stringify({
-      mcpServers: { rea: { command: command[0], args: command.slice(1) } },
+      mcpServers: { rea2: { command: command[0], args: command.slice(1) } },
     });
     await writeFile(configPath, original);
     expect(await systemUninstallHost(home).removeClient(client)).toMatchObject({
@@ -140,7 +139,7 @@ it("retains rea-named custom shell registrations without writing a backup", asyn
 });
 
 it.skipIf(process.platform !== "win32")(
-  "starts the written Windows registration through a native npx.cmd shim",
+  "starts the written Windows registration without invoking a native npx.cmd shim",
   async () => {
     const root = await createTestTempDirectory("rea-windows-mcp-");
     const home = join(root, "home with spaces");
@@ -156,25 +155,12 @@ it.skipIf(process.platform !== "win32")(
       status: "configured",
     });
     const decoded: unknown = JSON.parse(await readFile(configPath, "utf8"));
-    const registration = configurationSchema.parse(decoded).mcpServers.rea;
+    const registration = configurationSchema.parse(decoded).mcpServers.rea2;
     expect([registration.command, ...registration.args]).toEqual(
       setupRegistrationCommand("win32", true),
     );
-    const entry = fileURLToPath(
-      new URL("../../../scripts/rea.mjs", import.meta.url),
-    );
-    // Exercise the actual batch-shim boundary without registry access or package installation.
-    await writeFile(
-      join(home, "npx.cmd"),
-      [
-        "@echo off",
-        'if not "%~1"=="-y" exit /b 11',
-        `if not "%~2"=="${PRODUCT_IDENTITY.registrationPackageSpecifier}" exit /b 12`,
-        'if not "%~3"=="mcp" exit /b 13',
-        `"${process.execPath}" "${entry}" mcp`,
-        "",
-      ].join("\r\n"),
-    );
+    // A local Node launcher bypasses npx.cmd and the package registry.
+    await writeFile(join(home, "npx.cmd"), "@echo off\r\nexit /b 99\r\n");
     const transport = new StdioClientTransport({
       command: registration.command,
       args: registration.args,

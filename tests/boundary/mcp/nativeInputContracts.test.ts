@@ -8,6 +8,7 @@ import type { JsonValue } from "../../../src/domain/jsonValue.js";
 import { ok } from "../../../src/domain/result.js";
 import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
 import { createServer } from "../../../src/server/createServer.js";
+import { attachNonexecutingMcpFixture } from "../../support/investigation/ownedMcpFixture.js";
 
 const provider = {
   id: "fixture-native",
@@ -35,7 +36,12 @@ const resources: Array<{ close(): Promise<void> }> = [];
 const connect = async (
   execute: AnalysisOperationPort["execute"],
 ): Promise<Client> => {
-  const server = createServer({ kind: "fixed", analysis: { execute } });
+  const port = Object.freeze({ execute });
+  const server = createServer({ kind: "fixed", analysis: port });
+  await attachNonexecutingMcpFixture(server, port, [
+    { name: "inspect_plist", arguments: {} },
+    { name: "inspect_plist", arguments: { path: "/tmp/Other.plist" } },
+  ]);
   const client = new Client({ name: "native-contract-test", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

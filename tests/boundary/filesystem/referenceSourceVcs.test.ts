@@ -13,7 +13,7 @@ const readVcs = (root: string, signal?: AbortSignal) =>
     return result.value;
   });
 
-it("reads a linked worktree's own branch and detached HEAD through shared Git refs", async () => {
+it("reads in-root Git refs while reporting external worktree metadata as unknown", async () => {
   const root = await createTestTempDirectory("rea-reference-worktree-");
   const repository = join(root, "repository");
   await mkdir(repository);
@@ -63,22 +63,22 @@ it("reads a linked worktree's own branch and detached HEAD through shared Git re
     dirty: null,
   });
   expect(await readVcs(linked)).toEqual({
-    kind: "git",
-    head: linkedHead,
+    kind: "unknown",
+    head: null,
     dirty: null,
   });
   await git("pack-refs", "--all", "--prune");
   expect(await readVcs(linked)).toEqual({
-    kind: "git",
-    head: linkedHead,
+    kind: "unknown",
+    head: null,
     dirty: null,
   });
   await execFileOutput("git", ["checkout", "--detach", mainHead], {
     cwd: linked,
   });
   expect(await readVcs(linked)).toEqual({
-    kind: "git",
-    head: mainHead,
+    kind: "unknown",
+    head: null,
     dirty: null,
   });
   const relativePointer = join(root, "relative");
@@ -88,8 +88,8 @@ it("reads a linked worktree's own branch and detached HEAD through shared Git re
     "gitdir: ../repository/.git\r\n",
   );
   expect(await readVcs(relativePointer)).toEqual({
-    kind: "git",
-    head: mainHead,
+    kind: "unknown",
+    head: null,
     dirty: null,
   });
   // A non-regular loose ref must remain unknown even when packed-refs has

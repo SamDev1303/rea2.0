@@ -14,6 +14,7 @@ import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import {
   canonicalSkillNeedsInstall,
   installCanonicalSkill,
+  readInstalledSkillIdentity,
 } from "../../../src/application/SetupSkill.js";
 import {
   runDoctor,
@@ -24,6 +25,18 @@ import { TOOL_CONTRACTS } from "../../../src/contracts/toolContracts.js";
 import { PRODUCT_IDENTITY } from "../../../src/identity.js";
 import { z } from "zod";
 import { skillReferenceIssues } from "../../../scripts/lib/docs-facts.mjs";
+
+// Retained technical bundle tests explicitly use the legacy reader, not production discovery.
+const legacyDoctorHost = (options: Parameters<typeof systemDoctorHost>[0]) => ({
+  ...systemDoctorHost(options),
+  installedSkillIdentity: (clients: readonly string[]) =>
+    readInstalledSkillIdentity(
+      options?.environment?.HOME ?? "",
+      clients,
+      options?.environment ?? {},
+      process.platform,
+    ),
+});
 
 describe("canonical skill transaction", () => {
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -72,7 +85,7 @@ describe("canonical skill transaction", () => {
         },
       }),
     );
-    const host = systemDoctorHost({
+    const host = legacyDoctorHost({
       environment: {
         HOME: home,
         USERPROFILE: home,
@@ -120,7 +133,7 @@ describe("canonical skill transaction", () => {
       claudeSkills,
       "reverse-engineer-anything/SKILL.md",
     );
-    const host = systemDoctorHost({
+    const host = legacyDoctorHost({
       environment: { HOME: home, USERPROFILE: home },
     });
     const doctorScope = { clients: ["claude_code", "codex"], skill: true };
@@ -287,7 +300,7 @@ it("doctor verifies installed instructions and references even when metadata is 
     dirname(destination),
     "references/evidence-workflows.md",
   );
-  const system = systemDoctorHost({
+  const system = legacyDoctorHost({
     environment: { HOME: home, USERPROFILE: home },
   });
   const host = createDoctorHostFixture({

@@ -60,7 +60,9 @@ describe("release configuration", () => {
           content,
         )?.[0];
 
-      expect(versionBlock).toContain(`rea-agents@${packageJson.version}`);
+      expect(versionBlock).toContain(
+        `REA 2.0 engine version: ${packageJson.version}`,
+      );
     },
   );
 
@@ -79,44 +81,29 @@ describe("release configuration", () => {
     expect(/^## \[([^\]]+)\]/mu.exec(changelog)?.[1]).toBe(packageJson.version);
   });
 
-  it("keeps the npm package and MCP Registry metadata aligned", async () => {
+  it("keeps the private local package and unpublished MCP metadata aligned", async () => {
     const packageJson = (await readJson("package.json")) as {
       name: string;
       version: string;
       mcpName: string;
     };
-    const serverJson = (await readJson("server.json")) as {
-      name: string;
-      version: string;
-      packages: Array<{
-        registryType: string;
-        registryBaseUrl: string;
-        identifier: string;
-        version: string;
-        runtimeHint: string;
-        transport: { type: string };
-        packageArguments: Array<{ type: string; value: string }>;
-      }>;
-    };
-
+    const serverJson = (await readJson("server.json")) as Record<
+      string,
+      unknown
+    >;
     expect(packageJson).toMatchObject({
-      name: "rea-agents",
-      mcpName: "io.github.morluto/rea",
+      name: "rea2-local",
+      mcpName: "io.github.SamDev1303/rea2",
+      private: true,
+      bin: { rea2: "scripts/rea.mjs" },
+      scripts: { prepublishOnly: "node scripts/block-publication.mjs" },
     });
+    expect(packageJson).not.toHaveProperty("publishConfig");
     expect(serverJson).toMatchObject({
       name: packageJson.mcpName,
       version: packageJson.version,
-      packages: [
-        {
-          registryType: "npm",
-          registryBaseUrl: "https://registry.npmjs.org",
-          identifier: packageJson.name,
-          version: packageJson.version,
-          runtimeHint: "npx",
-          transport: { type: "stdio" },
-          packageArguments: [{ type: "positional", value: "mcp" }],
-        },
-      ],
+      repository: { url: "https://github.com/SamDev1303/rea2.0" },
     });
+    expect(serverJson).not.toHaveProperty("packages");
   });
 });

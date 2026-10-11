@@ -18,6 +18,7 @@ import { MCP_STARTUP_POLICY } from "../mcpStartupPolicy.js";
 import {
   isOwnedClientRegistrationCommand,
   npxRegistrationCommand,
+  localRegistrationCommand,
 } from "./ClientRegistrationIdentity.js";
 import {
   clientEvidencePaths,
@@ -73,7 +74,7 @@ const registrationSchema = z
 /** Inspect supported client registrations without reading their environment. */
 export const readClientRegistrationStatuses = async (
   home: string,
-  currentCommandPath: string = resolve(process.argv[1] ?? "unknown"),
+  currentCommandPath: string = localRegistrationCommand()[1]!,
   options: {
     readonly platform?: NodeJS.Platform;
     readonly environment?: NodeJS.ProcessEnv;

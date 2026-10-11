@@ -6,7 +6,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished } from "vitest";
 import { AndroidAnalysisService } from "../../../src/application/android/AndroidAnalysisService.js";
@@ -52,7 +52,7 @@ export const createJadxProtocolFixture = async (
     legacyJavaOptions: string | undefined;
   }[] = [];
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
     JAVA_HOME: javaHome,
     REA_JADX_MCP_JAR: jar,
   };
@@ -64,7 +64,17 @@ export const createJadxProtocolFixture = async (
         command: process.execPath,
         arguments: [fixture],
         expectedCommand: process.execPath,
-        env: { ...options.env, REA_FAKE_JADX_MODE: mode },
+        // The authored Node protocol fixture and fake Java probe need only
+        // these explicit names. Loader hooks and ambient credentials stay out.
+        hostEnvironment: {},
+        env: {
+          PATH: environment.PATH,
+          JAVA_HOME: javaHome,
+          REA_JADX_MCP_JAR: jar,
+          JAVA_TOOL_OPTIONS: environment.JAVA_TOOL_OPTIONS,
+          _JAVA_OPTIONS: environment._JAVA_OPTIONS,
+          REA_FAKE_JADX_MODE: mode,
+        },
       });
       launches.push({
         runId: options.runId,

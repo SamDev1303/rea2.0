@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { link, mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { expect, it } from "vitest";
 import { LocalWebScriptArtifacts } from "../../../src/browser/assets/LocalWebScriptArtifacts.js";
@@ -20,6 +20,38 @@ const materialize = async () => {
   await writeFile(manifestPath, JSON.stringify(artifact.manifest));
   return { root, artifact, sourcePath, manifestPath };
 };
+
+it.each(["protected-descendant", "hardlink"] as const)(
+  "rejects a manifest-derived %s even when its digest matches",
+  async (kind) => {
+    const fixture = await materialize();
+    const manifest = structuredClone(fixture.artifact.manifest);
+    const selected = manifest.scripts[0];
+    if (selected === undefined || selected.content.state !== "exported")
+      throw new Error("Expected exported fixture source");
+    if (kind === "protected-descendant") {
+      await mkdir(join(fixture.root, "files", "secrets"));
+      await writeFile(
+        join(fixture.root, "files", "secrets", "fixture.js"),
+        fixture.artifact.source,
+      );
+      selected.content.relative_path = "secrets/fixture.js";
+    } else {
+      await link(fixture.sourcePath, join(fixture.root, "files", "alias.js"));
+      selected.content.relative_path = "alias.js";
+    }
+    await writeFile(fixture.manifestPath, JSON.stringify(manifest));
+    const response = await new LocalWebScriptArtifacts(
+      "trace_web_source_location",
+    ).load({
+      manifest_path: fixture.manifestPath,
+      script_index: 0,
+    });
+    if (response.ok)
+      throw new Error("Expected protected derived source rejection");
+    expect(response.error).toMatchObject({ reason: "path" });
+  },
+);
 
 it("reads equivalent local manifest spellings without changing reported identity", async () => {
   const fixture = await materialize();

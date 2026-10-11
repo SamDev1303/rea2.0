@@ -1,4 +1,12 @@
 import { expect } from "vitest";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { machoImage } from "../../../src/artifacts/apple/MachoImage.fixture.js";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
+import {
+  attachNonexecutingMcpFixture,
+  type OwnedMcpFixtureRequest,
+} from "../../support/investigation/ownedMcpFixture.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { composeBinarySession } from "../../../src/application/binary/BinarySessionComposition.js";
@@ -27,6 +35,10 @@ export const connectGhidraMcp = async (
   name: string,
   execute?: ReturnType<GhidraProviderClientFactory>["callTool"],
 ) => {
+  const requests = requestsFor(name);
+  const root = await createTestTempDirectory("rea-owned-ghidra-bridge-");
+  const target = join(root, "Fixture");
+  await writeFile(target, Buffer.from(machoImage({})));
   const calls: GhidraOperation[] = [];
   const factory: GhidraProviderClientFactory = (options) => ({
     start: () =>
@@ -54,7 +66,7 @@ export const connectGhidraMcp = async (
   );
   const server = createServer(
     { kind: "session", session },
-    { logger: silentLogger },
+    { logger: silentLogger, environment: {} },
   );
   const mcp = new Client({ name, version: "1.0.0" });
   const [clientTransport, serverTransport] =
@@ -66,14 +78,16 @@ export const connectGhidraMcp = async (
   try {
     await server.connect(serverTransport);
     await mcp.connect(clientTransport);
-    const opened = await mcp.callTool({
+    const denied = await mcp.callTool({
       name: "open_binary",
-      arguments: { path: process.execPath },
+      arguments: { path: target },
     });
-    if (opened.isError === true)
-      throw new Error(
-        `The Ghidra MCP harness could not open its target: ${JSON.stringify(opened)}`,
-      );
+    expect(denied.isError).toBe(true);
+    expect(calls).toEqual([]);
+    // Only authored inert bytes reach the real provider; its bridge is this fixed in-memory factory.
+    const opened = await session.open(target);
+    if (!opened.ok) throw opened.error;
+    await attachNonexecutingMcpFixture(server, session, requests);
   } catch (cause: unknown) {
     await close();
     throw cause;
@@ -277,3 +291,96 @@ const stringItem = (address: string, value: string): JsonValue => ({
     byte_length: value.length + 1,
   },
 });
+
+/** Complete finite request inventory chosen before any target-facing SDK call. */
+const requestsFor = (name: string): readonly OwnedMcpFixtureRequest[] => {
+  const table: Record<string, readonly OwnedMcpFixtureRequest[]> = {
+    "ghidra-compact-provenance": compactRequests(),
+    "ghidra-compact-unknown": compactRequests(),
+    "ghidra-failure-diagnostics": [{ name: "list_procedures", arguments: {} }],
+    "ghidra-native-api": [
+      { name: "inspect_native_api", arguments: { procedure: "fixture_main" } },
+    ],
+    "ghidra-routing": [
+      { name: "batch_decompile", arguments: { addresses: ["fixture_main"] } },
+      {
+        name: "set_comment",
+        arguments: { address: "0x1000", comment: "must not mutate" },
+      },
+      { name: "binary_session", arguments: {} },
+    ],
+    "ghidra-parity": [
+      { name: "list_procedures", arguments: {} },
+      { name: "binary_overview", arguments: {} },
+      {
+        name: "procedure_pseudo_code",
+        arguments: { procedure: "fixture_main" },
+      },
+      { name: "analyze_function", arguments: { procedure: "fixture_main" } },
+    ],
+    "ghidra-terminal-call-evidence": [
+      ...[
+        "procedure_pseudo_code",
+        "procedure_assembly",
+        "procedure_info",
+        "read_function_instructions",
+      ].map((name) => ({
+        name,
+        arguments: { procedure: "0x401000", document: "fixture" },
+      })),
+      { name: "analyze_function", arguments: { procedure: "0x401000" } },
+    ],
+    "ghidra-malformed-annotation": [
+      {
+        name: "annotate_native_function",
+        arguments: { procedure: "0x401000", inline_comment: "Finding" },
+      },
+    ],
+    "ghidra-address-naming": [
+      {
+        name: "set_address_name",
+        arguments: { address: "0x1000", name: "fixture_entry" },
+      },
+      {
+        name: "set_addresses_names",
+        arguments: {
+          names: { "0x1000": "fixture_entry", "0x2000": "g_value" },
+        },
+      },
+    ],
+    "ghidra-string-coverage": [
+      { name: "list_strings", arguments: {} },
+      { name: "search_strings", arguments: { pattern: "projection" } },
+      {
+        name: "search_strings",
+        arguments: { pattern: "projection.*", mode: "regex" },
+      },
+      { name: "search_procedures", arguments: { pattern: "projection" } },
+    ],
+    "ghidra-invalid-inventory": [
+      ...[0x401000, 0x401004, 0x401008, 0x40100c, 0x401010].map((address) => ({
+        name: "read_bytes",
+        arguments: { address: `0x${address.toString(16)}`, length: 4 },
+      })),
+      { name: "address_to_file_offset", arguments: { address: "0x401000" } },
+      { name: "list_procedures", arguments: {} },
+      { name: "search_strings", arguments: { pattern: "needle" } },
+      {
+        name: "read_function_instructions",
+        arguments: { procedure: "fixture_main" },
+      },
+      {
+        name: "resolve_containing_procedure",
+        arguments: { address: "EXTERNAL:0x2" },
+      },
+    ],
+  };
+  const requests = table[name];
+  if (requests === undefined)
+    throw new Error(`Undeclared bridge fixture ${name}`);
+  return requests;
+};
+const compactRequests = (): readonly OwnedMcpFixtureRequest[] => [
+  { name: "inspect_native_instruction", arguments: { address: "0x401000" } },
+  { name: "resolve_native_call_targets", arguments: { address: "0x401000" } },
+];

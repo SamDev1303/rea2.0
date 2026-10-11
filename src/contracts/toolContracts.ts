@@ -1,3 +1,5 @@
+import { SWIFT_TOOL_CONTRACTS } from "./swiftToolContracts.js";
+import { INVESTIGATION_WORKFLOW_TOOL_CONTRACTS } from "./investigationWorkflowToolContracts.js";
 import { EVM_TOOL_CONTRACTS } from "./evm/evmToolContracts.js";
 import { ANALYSIS_VIEW_TOOL_CONTRACTS } from "./analysisViewToolContracts.js";
 import { BINARY_DIAGNOSTICS_TOOL_CONTRACTS } from "./native/binaryDiagnosticsToolContracts.js";
@@ -24,6 +26,8 @@ import { SESSION_TOOL_CONTRACTS } from "./sessionToolContracts.js";
 
 /** Complete ordered public inventory used by registration and verification. */
 export const TOOL_CONTRACTS = [
+  ...SWIFT_TOOL_CONTRACTS,
+  ...INVESTIGATION_WORKFLOW_TOOL_CONTRACTS,
   ...OFFICIAL_TOOL_CONTRACTS,
   ...ENHANCED_TOOL_CONTRACTS,
   ...NATIVE_TOOL_CONTRACTS,

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { inspectSyntheticNative } from "../../support/investigation/ownedAppleStaticCliFixture.js";
 
 const environment = {
   REA_LOG_LEVEL: "silent",
@@ -27,9 +28,7 @@ const FORGED_NAME = [
   "        0x00000123  _forged_export",
 ].join("\n");
 
-const resultSchema = z.object({
-  normalized_result: z.record(z.string(), z.unknown()),
-});
+const resultSchema = z.record(z.string(), z.unknown());
 
 describe.skipIf(process.platform !== "darwin")(
   "native Mach-O CLI with echoed path text",
@@ -45,10 +44,17 @@ describe.skipIf(process.platform !== "darwin")(
             arguments: ["inspect-macho", path, "--json"],
             environment,
           });
-          expect(result.exitCode).toBe(0);
+          expect(result.exitCode).toBe(1);
+          expect(result.json).toMatchObject({ code: "capability_unavailable" });
+          const inspected = await inspectSyntheticNative(
+            { path },
+            "inspect_macho",
+          );
+          expect(inspected.ok).toBe(true);
+          if (!inspected.ok) throw inspected.error;
           const { provenance: _provenance, ...facts } = resultSchema.parse(
-            result.json,
-          ).normalized_result;
+            inspected.value.result,
+          );
           return facts;
         };
         const forged = await inspect(FORGED_NAME);

@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import {
   spawn as nodeSpawn,
   type ChildProcess,
@@ -35,6 +36,18 @@ export interface TestProcesses {
     arguments_: readonly string[],
     options?: ProcessRunOptions,
   ): Promise<ProcessResult>;
+  runWithControllerData(
+    command: string,
+    arguments_: readonly string[],
+    controllerData: string,
+    options?: ProcessRunOptions,
+  ): Promise<ProcessResult>;
+  spawnWithControllerData(
+    command: string,
+    arguments_: readonly string[],
+    controllerData: string,
+    options?: SpawnOptionsWithoutStdio,
+  ): ChildProcessWithoutNullStreams;
   shutdown(): Promise<void>;
 }
 
@@ -73,6 +86,7 @@ const stopChild = async (
 /** Create a child-process registry for a fixture composition root. */
 export const createTestProcessRegistry = (): TestProcesses => {
   const children = new Set<ChildProcessWithoutNullStreams>();
+  const controllerFailures = new WeakMap<ChildProcess, unknown>();
 
   const spawn = (
     command: string,
@@ -89,54 +103,109 @@ export const createTestProcessRegistry = (): TestProcesses => {
     return child;
   };
 
+  const spawnWithControllerData: TestProcesses["spawnWithControllerData"] = (
+    command,
+    arguments_,
+    controllerData,
+    options = {},
+  ) => {
+    if (Buffer.byteLength(controllerData) > 1024 * 1024)
+      throw new Error("Controller fixture data exceeds its byte budget");
+    const child = nodeSpawn(command, arguments_, {
+      ...options,
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+    children.add(child);
+    child.once("exit", () => children.delete(child));
+    child.once("close", () => children.delete(child));
+    const pipe = child.stdio[3];
+    if (!(pipe instanceof Writable)) {
+      child.kill("SIGTERM");
+      throw new Error("Private fixture controller pipe is unavailable");
+    }
+    pipe.once("error", (cause: unknown) => {
+      controllerFailures.set(child, cause);
+      child.kill("SIGTERM");
+    });
+    pipe.end(controllerData);
+    return child;
+  };
+
+  const run = async (
+    command: string,
+    arguments_: readonly string[],
+    options: ProcessRunOptions = {},
+    controllerData?: string,
+  ): Promise<ProcessResult> => {
+    const { input, timeoutMs, ...spawnOptions } = options;
+    const child =
+      controllerData === undefined
+        ? spawn(command, arguments_, spawnOptions)
+        : spawnWithControllerData(
+            command,
+            arguments_,
+            controllerData,
+            spawnOptions,
+          );
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    if (input === undefined) child.stdin.end();
+    else child.stdin.end(input);
+
+    let timedOut = false;
+    let killTimeout: NodeJS.Timeout | undefined;
+    const timeout =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+            killTimeout = setTimeout(() => {
+              child.kill("SIGKILL");
+            }, SHUTDOWN_GRACE_MS);
+            killTimeout.unref();
+          }, timeoutMs);
+    timeout?.unref();
+
+    const result = await new Promise<ProcessResult>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (exitCode, signal) =>
+        resolve({
+          exitCode,
+          signal,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        }),
+      );
+    }).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (killTimeout !== undefined) clearTimeout(killTimeout);
+    });
+    if (timedOut) {
+      throw new Error(`Test process exceeded its ${timeoutMs}ms deadline`, {
+        cause: result,
+      });
+    }
+    const controllerFailure = controllerFailures.get(child);
+    if (controllerFailure !== undefined)
+      throw new Error("Fixture controller transfer failed", {
+        cause: controllerFailure,
+      });
+    return result;
+  };
+
   return {
     spawn,
-    run: async (command, arguments_, options = {}) => {
-      const { input, timeoutMs, ...spawnOptions } = options;
-      const child = spawn(command, arguments_, spawnOptions);
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      if (input === undefined) child.stdin.end();
-      else child.stdin.end(input);
-
-      let timedOut = false;
-      let killTimeout: NodeJS.Timeout | undefined;
-      const timeout =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              timedOut = true;
-              child.kill("SIGTERM");
-              killTimeout = setTimeout(() => {
-                child.kill("SIGKILL");
-              }, SHUTDOWN_GRACE_MS);
-              killTimeout.unref();
-            }, timeoutMs);
-      timeout?.unref();
-
-      const result = await new Promise<ProcessResult>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (exitCode, signal) =>
-          resolve({
-            exitCode,
-            signal,
-            stdout: Buffer.concat(stdout).toString("utf8"),
-            stderr: Buffer.concat(stderr).toString("utf8"),
-          }),
-        );
-      }).finally(() => {
-        if (timeout !== undefined) clearTimeout(timeout);
-        if (killTimeout !== undefined) clearTimeout(killTimeout);
-      });
-      if (timedOut) {
-        throw new Error(`Test process exceeded its ${timeoutMs}ms deadline`, {
-          cause: result,
-        });
-      }
-      return result;
-    },
+    spawnWithControllerData,
+    run,
+    runWithControllerData: (
+      command,
+      arguments_,
+      controllerData,
+      options = {},
+    ) => run(command, arguments_, options, controllerData),
     shutdown: async () => {
       const results = await Promise.allSettled(
         [...children].reverse().map(async (child) => {
