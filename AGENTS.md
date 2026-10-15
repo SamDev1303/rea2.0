@@ -1,3 +1,7 @@
+Global rules: `~/Sync/AGENTS.md`
+
+Read the shared global rules first. This file adds project context; current global instructions take precedence over older workflow text below.
+
 # Repository Guidelines
 
 ## Product and Authority
